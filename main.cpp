@@ -45,7 +45,7 @@
 using std::vector;
 using std::string;
 
-const int SPECT_WIDTH = 64;
+const int SPECT_WIDTH = 128;
 
 ArduiPi_OLED display; // global, for use during signal handling
 
@@ -383,7 +383,12 @@ string print_config_file(int bars, int framerate,
 
   fprintf(ofile, "[general]\n"
                  "framerate = %d\n"
+                 "autosens = 0\n"
+                 "overshoot = 0\n"
+                 "sensitivity = 6\n"
                  "bars = %d\n"
+                 "lower_cutoff_freq = 20\n"
+                 "higher_cutoff_freq = 20000\n"
                  "\n"
                  "[input]\n"
                  "method = %s\n"
@@ -393,8 +398,20 @@ string print_config_file(int bars, int framerate,
                  "method = raw\n"
                  "data_format = binary\n"
                  "channels = mono\n"
+                 "mono_option = average\n"
                  "raw_target = %s\n"
-                 "bit_format = 8bit\n",
+                 "bit_format = 8bit\n"
+                 "\n"
+                 "[smoothing]\n"
+                 "intergral = 0\n"
+                 "gravity = 60\n"
+                 "\n"
+                 "[eq]\n"
+                 "1 = 1.4\n"
+                 "2 = 1.2\n"
+                 "3 = 1.2\n"
+                 "4 = 1.1\n"
+                 "5 = 0.9\n",
           framerate, bars, cava_method.c_str(), cava_source.c_str(),
           fifo_path_cava_out.c_str());
   fclose(ofile);
@@ -418,26 +435,26 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
 {
   const int H = 8;  // character height
   const int W = 6;  // character width
-  draw_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
-  draw_connection(display, 128-2*W, 0, disp_info.conn);
-  draw_triangle_slider(display, 128-5*W, 1, 11, 6, disp_info.status.get_volume());
+  draw_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
+//  draw_connection(display, 128-2*W, 0, disp_info.conn);
+//  draw_triangle_slider(display, 128-5*W, 1, 11, 6, disp_info.status.get_volume());
   if (disp_info.status.get_kbitrate() > 0)
-    draw_text(display, 128-10*W, 0, 4, disp_info.status.get_kbitrate_str());
-
-  int clock_offset = (disp_info.clock_format < 2) ? 0 : -2;
-  draw_time(display, 128-10*W+clock_offset, 2*H, 2, disp_info.clock_format);
+    draw_text(display, 128-5*W, 6*H+4, 4, disp_info.status.get_kbitrate_str());
+    draw_text(display, 128-1*W, 6*H+4, 1, "k");
+//  int clock_offset = (disp_info.clock_format < 2) ? 0 : -2;
+//  draw_time(display, 128-10*W+clock_offset, 2*H, 2, disp_info.clock_format);
 
   vector<double> scroll_origin(disp_info.scroll.begin()+2,
                                disp_info.scroll.begin()+4);
-  draw_text_scroll(display, 0, 4*H+4, 20, disp_info.status.get_origin(),
-      scroll_origin, disp_info.text_change.secs());
+//  draw_text_scroll(display, 0, 4*H+4, 20, disp_info.status.get_origin(),
+//      scroll_origin, disp_info.text_change.secs());
 
   vector<double> scroll_title(disp_info.scroll.begin(),
                               disp_info.scroll.begin()+2);
-  draw_text_scroll(display, 0, 6*H, 20, disp_info.status.get_title(),
+  draw_text_scroll(display, 0, 6*H+4, 14, disp_info.status.get_title(),
       scroll_title, disp_info.text_change.secs());
 
-  draw_solid_slider(display, 0, 7*H+6, 128, 2,
+  draw_solid_slider(display, 0, 7*H+7, 128, 1,
       100*disp_info.status.get_progress());
 }
 
@@ -458,7 +475,7 @@ pthread_mutex_t disp_info_lock;
 
 void *update_info(void *data)
 {
-  const float delay_secs = 0.3;
+  const float delay_secs = 1;
   display_info *disp_info_orig = (display_info *)data;
   while (true) {
     pthread_mutex_lock(&disp_info_lock);
