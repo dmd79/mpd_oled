@@ -246,9 +246,6 @@ void mpd_info::init_vals()
 
 void mpd_info::set_vals(struct mpd_connection *conn)
 {
-  if (player.is(Player::Name::volumio))
-    set_vals_volumio(conn);
-  else
     set_vals_mpd(conn);
 }
 
