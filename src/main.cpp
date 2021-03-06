@@ -47,7 +47,8 @@ using std::string;
 using std::vector;
 
 const int SPECT_WIDTH = 64;
-
+int display_auto_off;          // -1 always on, from 0 to 3600 sec display timeout
+  
 ArduiPi_OLED display; // global, for use during signal handling
 
 void cleanup(void)
@@ -174,6 +175,7 @@ Options
   -D <gpio>  SPI DC GPIO number (default: 24)
   -S <num>   SPI CS number (default: 0)
   -p <plyr>  Player: mpd, moode, volumio, runeaudio (default: detected)
+  -t <secs>  Display timeout in stop mode: -1 always on, from 0 to 3600 secs
 Example :
 %s -o 6 use a %s OLED
 )",
@@ -189,7 +191,7 @@ void OledOpts::process_command_line(int argc, char **argv)
 
   handle_long_opts(argc, argv);
 
-  while ((c = getopt(argc, argv, ":ho:b:g:f:s:C:dP:kc:RI:a:B:r:D:S:p:")) != -1) {
+  while ((c = getopt(argc, argv, ":ho:b:g:f:s:C:dP:kc:RI:a:B:r:D:S:p:t:")) != -1) {
     if (common_opts(c, optopt))
       continue;
 
@@ -353,6 +355,13 @@ void OledOpts::process_command_line(int argc, char **argv)
       player.set_name(arg_id);
       break;
     }
+    
+    case 't': {
+      print_status_or_exit(read_int(optarg, &display_auto_off), c);
+      if (display_auto_off < -1 || display_auto_off > 3600)
+        error("only value from -1 to 3600", c);
+      break;
+    }
 
     default:
       error("unknown command line error");
@@ -418,6 +427,11 @@ void draw_clock(ArduiPi_OLED &display, const display_info &disp_info)
   draw_date(display, 32, 56, 1, disp_info.date_format);
 }
 
+void draw_blank(ArduiPi_OLED &display, const display_info &disp_info)
+{
+  display.clearDisplay();
+}
+
 void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
 {
   const int H = 8; // character height
@@ -449,12 +463,23 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
 
 void draw_display(ArduiPi_OLED &display, const display_info &disp_info)
 {
-  mpd_state state = disp_info.status.get_state();
+  static Counter counter;
+  enum mpd_state state = disp_info.status.get_state();
   if (state == MPD_STATE_UNKNOWN || state == MPD_STATE_STOP ||
       (state == MPD_STATE_PAUSE && disp_info.pause_screen == 's'))
-    draw_clock(display, disp_info);
+    {
+      if (display_auto_off == -1)
+        draw_clock(display, disp_info);
+      else if (counter.secs() < display_auto_off)
+        draw_clock(display, disp_info);
+      else
+        draw_blank(display, disp_info);
+    }
   else
-    draw_spect_display(display, disp_info);
+    {
+      draw_spect_display(display, disp_info);
+      counter.reset();
+    }
 }
 
 namespace {
