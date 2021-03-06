@@ -98,6 +98,7 @@ public:
   const double DEF_SCROLL_DELAY = 5;   // second delay before scrolling
   int oled = OLED_ADAFRUIT_SPI_128x32; // OLED type, as a number
   int framerate = 15;                  // frame rate in Hz
+  int autosens = 0;                    // Autosens will attempt to decrease sensitivity if the bars peak. 1 = on, 0 = off
   int bars = 16;                       // number of bars in spectrum
   int gap = 1;                         // gap between bars, in pixels
   vector<double> scroll;   // rate (pixels per sec), start delay (secs)
@@ -152,6 +153,7 @@ Options
           R"(  -b <num>   number of bars to display (default: 16)
   -g <sz>    gap between bars in, pixels (default: 1)
   -f <hz>    framerate in Hz (default: 15)
+  -A <autosens> 1 = on, 0 = off
   -s <vals>  scroll rate (pixels per second) and start delay (seconds), up
              to four comma separated decimal values (default: %.1f,%.1f) as:
                 rate_all
@@ -191,7 +193,7 @@ void OledOpts::process_command_line(int argc, char **argv)
 
   handle_long_opts(argc, argv);
 
-  while ((c = getopt(argc, argv, ":ho:b:g:f:s:C:dP:kc:RI:a:B:r:D:S:p:t:")) != -1) {
+  while ((c = getopt(argc, argv, ":ho:b:g:f:A:s:C:dP:kc:RI:a:B:r:D:S:p:t:")) != -1) {
     if (common_opts(c, optopt))
       continue;
 
@@ -207,6 +209,12 @@ void OledOpts::process_command_line(int argc, char **argv)
       print_status_or_exit(read_int(optarg, &bars), c);
       if (bars < 2 || bars > 60)
         error("select between 2 and 60 bars", c);
+      break;
+
+    case 'A':
+      print_status_or_exit(read_int(optarg, &autosens), c);
+      if (autosens < 0 || autosens > 1)
+        error("only 0 or 1 accepted", c);
       break;
 
     case 'g':
@@ -383,7 +391,7 @@ void OledOpts::process_command_line(int argc, char **argv)
         SPECT_WIDTH, bars, gap, min_spect_width));
 }
 
-string print_config_file(int bars, int framerate, string cava_method,
+string print_config_file(int bars, int autosens, int framerate, string cava_method,
                          string cava_source, string fifo_path_cava_out)
 {
   char templt[] = "/tmp/cava_config_XXXXXX";
@@ -398,6 +406,7 @@ string print_config_file(int bars, int framerate, string cava_method,
           "[general]\n"
           "framerate = %d\n"
           "bars = %d\n"
+          "autosens = %d\n"
           "\n"
           "[input]\n"
           "method = %s\n"
@@ -409,7 +418,7 @@ string print_config_file(int bars, int framerate, string cava_method,
           "channels = mono\n"
           "raw_target = %s\n"
           "bit_format = 8bit\n",
-          framerate, bars, cava_method.c_str(), cava_source.c_str(),
+          framerate, bars, autosens, cava_method.c_str(), cava_source.c_str(),
           fifo_path_cava_out.c_str());
   fclose(ofile);
   return templt;
@@ -615,7 +624,7 @@ int main(int argc, char **argv)
 
   // Create a temporary config file for cava
   string config_file_name =
-      print_config_file(opts.bars, opts.framerate, opts.cava_method,
+      print_config_file(opts.bars, opts.autosens, opts.framerate, opts.cava_method,
                         opts.cava_source, fifo_path_cava_out);
   if (config_file_name == "")
     opts.error("could not create cava config file: " + string(strerror(errno)));
