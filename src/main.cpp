@@ -46,7 +46,8 @@
 using std::string;
 using std::vector;
 
-const int SPECT_WIDTH = 64;
+int SPECT_WIDTH = 64;
+int full_spectrum = 0;         // 0 standard view, 1 large spectrum, 2 full spectrum
 int display_auto_off;          // -1 always on, from 0 to 3600 sec display timeout
   
 ArduiPi_OLED display; // global, for use during signal handling
@@ -181,6 +182,7 @@ Options
   -S <num>   SPI CS number (default: 0)
   -p <plyr>  Player: mpd, moode, volumio, runeaudio (default: detected)
   -t <secs>  Display timeout in stop mode: -1 always on, from 0 to 3600 secs
+  -F <val>   Choose spectrum view: 0 standard view, 1 large spectrum, 2 full spectrum
 Example :
 %s -o 6 use a %s OLED
 )",
@@ -196,7 +198,7 @@ void OledOpts::process_command_line(int argc, char **argv)
 
   handle_long_opts(argc, argv);
 
-  while ((c = getopt(argc, argv, ":ho:b:g:f:A:G:s:C:dP:kc:RI:a:B:r:D:S:p:t:")) != -1) {
+  while ((c = getopt(argc, argv, ":ho:b:g:f:A:G:s:C:dP:kc:RI:a:B:r:D:S:p:t:F:")) != -1) {
     if (common_opts(c, optopt))
       continue;
 
@@ -380,6 +382,13 @@ void OledOpts::process_command_line(int argc, char **argv)
       break;
     }
 
+    case 'F': {
+      print_status_or_exit(read_int(optarg, &full_spectrum), c);
+      if (full_spectrum < 0 || full_spectrum > 2)
+        error("only value from 0 to 2", c);
+      break;
+    }
+
     default:
       error("unknown command line error");
     }
@@ -392,6 +401,10 @@ void OledOpts::process_command_line(int argc, char **argv)
     error("must specify a 128x64 oled", 'o');
 
   const int min_spect_width = bars + (bars - 1) * gap; // assume bar width = 1
+  if (full_spectrum == 0)
+    SPECT_WIDTH = 64;
+  else
+    SPECT_WIDTH = 128;
   if (min_spect_width > SPECT_WIDTH)
     error(msg_str(
         "spectrum graph width is %d: to display %d bars with a gap of %d\n"
@@ -455,29 +468,54 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
 {
   const int H = 8; // character height
   const int W = 6; // character width
-  draw_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
-  draw_connection(display, 128 - 2 * W, 0, disp_info.conn);
-  draw_triangle_slider(display, 128 - 5 * W, 1, 11, 6,
-                       disp_info.status.get_volume());
-  if (disp_info.status.get_kbitrate() > 0)
-    draw_text(display, 128 - 10 * W, 0, 4, disp_info.status.get_kbitrate_str());
+  if (full_spectrum == 0)
+    {
+      draw_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
+      draw_connection(display, 128 - 2 * W, 0, disp_info.conn);
+      draw_triangle_slider(display, 128 - 5 * W, 1, 11, 6,
+                           disp_info.status.get_volume());
+      if (disp_info.status.get_kbitrate() > 0)
+        draw_text(display, 128 - 10 * W, 0, 4, disp_info.status.get_kbitrate_str());
 
-  int clock_offset = (disp_info.clock_format < 2) ? 0 : -2;
-  draw_time(display, 128 - 10 * W + clock_offset, 2 * H, 2,
-            disp_info.clock_format);
+      int clock_offset = (disp_info.clock_format < 2) ? 0 : -2;
+      draw_time(display, 128 - 10 * W + clock_offset, 2 * H, 2,
+                disp_info.clock_format);
 
-  vector<double> scroll_origin(disp_info.scroll.begin() + 2,
-                               disp_info.scroll.begin() + 4);
-  draw_text_scroll(display, 0, 4 * H + 4, 20, disp_info.status.get_origin(),
-                   scroll_origin, disp_info.text_change.secs());
+      vector<double> scroll_origin(disp_info.scroll.begin() + 2,
+                                   disp_info.scroll.begin() + 4);
+      draw_text_scroll(display, 0, 4 * H + 4, 20, disp_info.status.get_origin(),
+                       scroll_origin, disp_info.text_change.secs());
 
-  vector<double> scroll_title(disp_info.scroll.begin(),
-                              disp_info.scroll.begin() + 2);
-  draw_text_scroll(display, 0, 6 * H, 20, disp_info.status.get_title(),
-                   scroll_title, disp_info.text_change.secs());
+      vector<double> scroll_title(disp_info.scroll.begin(),
+                                  disp_info.scroll.begin() + 2);
+      draw_text_scroll(display, 0, 6 * H, 20, disp_info.status.get_title(),
+                       scroll_title, disp_info.text_change.secs());
 
-  draw_solid_slider(display, 0, 7 * H + 6, 128, 2,
-                    100 * disp_info.status.get_progress());
+      draw_solid_slider(display, 0, 7 * H + 6, 128, 2,
+                        100 * disp_info.status.get_progress());
+    }
+  else if (full_spectrum == 1)
+    {
+      draw_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
+      if (disp_info.status.get_kbitrate() > 0)
+        draw_text(display, 128-5*W, 6*H+4, 4, disp_info.status.get_kbitrate_str());
+        draw_text(display, 128-1*W, 6*H+4, 1, "k");
+
+      vector<double> scroll_origin(disp_info.scroll.begin()+2,
+                                   disp_info.scroll.begin()+4);
+
+      vector<double> scroll_title(disp_info.scroll.begin(),
+                                  disp_info.scroll.begin()+2);
+      draw_text_scroll(display, 0, 6*H+4, 14, disp_info.status.get_title(),
+          scroll_title, disp_info.text_change.secs());
+
+      draw_solid_slider(display, 0, 7*H+7, 128, 1,
+          100*disp_info.status.get_progress());
+    }
+  else if (full_spectrum == 2)
+    {
+      draw_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
+    }
 }
 
 void draw_display(ArduiPi_OLED &display, const display_info &disp_info)
