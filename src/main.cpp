@@ -48,6 +48,7 @@ using std::vector;
 
 int SPECT_WIDTH = 64;
 int full_spectrum = 0;         // 0 standard view, 1 large spectrum, 2 full spectrum
+int spectrum_type = 0;         // 0 full filled spectrum, 1 dot spectrum
 int display_auto_off;          // -1 always on, from 0 to 3600 sec display timeout
   
 ArduiPi_OLED display; // global, for use during signal handling
@@ -183,6 +184,7 @@ Options
   -p <plyr>  Player: mpd, moode, volumio, runeaudio (default: detected)
   -t <secs>  Display timeout in stop mode: -1 always on, from 0 to 3600 secs
   -F <val>   Choose spectrum view: 0 standard view, 1 large spectrum, 2 full spectrum
+  -T <val>   Choose spectrum type: 0 full filled spectrum, 1 dot spectrum, 2 inverted spectrum
 Example :
 %s -o 6 use a %s OLED
 )",
@@ -198,7 +200,7 @@ void OledOpts::process_command_line(int argc, char **argv)
 
   handle_long_opts(argc, argv);
 
-  while ((c = getopt(argc, argv, ":ho:b:g:f:A:G:s:C:dP:kc:RI:a:B:r:D:S:p:t:F:")) != -1) {
+  while ((c = getopt(argc, argv, ":ho:b:g:f:A:G:s:C:dP:kc:RI:a:B:r:D:S:p:t:F:T:")) != -1) {
     if (common_opts(c, optopt))
       continue;
 
@@ -389,6 +391,13 @@ void OledOpts::process_command_line(int argc, char **argv)
       break;
     }
 
+    case 'T': {
+      print_status_or_exit(read_int(optarg, &spectrum_type), c);
+      if (spectrum_type < 0 || spectrum_type > 2)
+        error("only value from 0 to 2", c);
+      break;
+    }
+
     default:
       error("unknown command line error");
     }
@@ -470,7 +479,12 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
   const int W = 6; // character width
   if (full_spectrum == 0)
     {
-      draw_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
+      if (spectrum_type == 0)
+        draw_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
+      else if (spectrum_type == 1)
+        draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
+      else if (spectrum_type == 2)
+        draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
       draw_connection(display, 128 - 2 * W, 0, disp_info.conn);
       draw_triangle_slider(display, 128 - 5 * W, 1, 11, 6,
                            disp_info.status.get_volume());
@@ -496,7 +510,12 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
     }
   else if (full_spectrum == 1)
     {
-      draw_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
+      if (spectrum_type == 0)
+        draw_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
+      else if (spectrum_type == 1)
+        draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
+      else if (spectrum_type == 2)
+        draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
       if (disp_info.status.get_kbitrate() > 0)
         draw_text(display, 128-5*W, 6*H+4, 4, disp_info.status.get_kbitrate_str());
         draw_text(display, 128-1*W, 6*H+4, 1, "k");
@@ -514,14 +533,19 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
     }
   else if (full_spectrum == 2)
     {
-      draw_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
+      if (spectrum_type == 0)
+        draw_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
+      else if (spectrum_type == 1)
+        draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
+      else if (spectrum_type == 2)
+        draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
     }
 }
 
 void draw_display(ArduiPi_OLED &display, const display_info &disp_info)
 {
   static Counter counter;
-  enum mpd_state state = disp_info.status.get_state();
+  mpd_state state = disp_info.status.get_state();
   if (state == MPD_STATE_UNKNOWN || state == MPD_STATE_STOP ||
       (state == MPD_STATE_PAUSE && disp_info.pause_screen == 's'))
     {
