@@ -37,6 +37,14 @@
 int draw_spectrum(ArduiPi_OLED &display, int x_start, int y_start, int width,
                   int height, const spect_graph &spect);
 
+// Draw dot spectrum graph
+int draw_dot_spectrum(ArduiPi_OLED &display, int x_start, int y_start, int width,
+                  int height, const spect_graph &spect);
+
+// Draw inverted spectrum graph
+int draw_inverted_spectrum(ArduiPi_OLED &display, int x_start, int y_start, int width,
+                  int height, const spect_graph &spect);
+
 // Draw time HH:MM, according to what - 0: 24h leading 0, 1: 24h no leading 0
 //                                      2: 24h leading 0, 3: 24h no leading 0
 void draw_time(ArduiPi_OLED &display, int start_x, int start_y, int sz,
