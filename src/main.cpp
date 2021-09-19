@@ -48,7 +48,7 @@ using std::vector;
 
 int SPECT_WIDTH = 64;
 int full_spectrum = 0;         // 0 standard view, 1 large spectrum, 2 full spectrum
-int spectrum_type = 0;         // 0 full filled spectrum, 1 dot spectrum
+int spectrum_type = 0;         // 0,3 full filled spectrum, 1,4 dot spectrum, 2,5 vu meter
 int display_auto_off;          // -1 always on, from 0 to 3600 sec display timeout
   
 ArduiPi_OLED display; // global, for use during signal handling
@@ -103,6 +103,8 @@ public:
   int autosens = 0;                    // Autosens will attempt to decrease sensitivity if the bars peak. 1 = on, 0 = off
   int sensitivity = 10;                // Manual sensitivity in %. Autosens must be turned off for this to take effect
   int bars = 16;                       // number of bars in spectrum
+  int channel_sel = 1;                 // 1 mono, 2 stereo
+  string channel = "mono";
   int gap = 1;                         // gap between bars, in pixels
   vector<double> scroll;   // rate (pixels per sec), start delay (secs)
   int clock_format = 0;    // 0-3: 0,1 - 24h  2,3 - 12h  0,2 - leading 0
@@ -159,6 +161,7 @@ Options
   -A <autosens> 1 = on, 0 = off
   -G <sensitivity> Manual sensitivity in %. Autosens must be turned off for this to take effect
                    200 means double height. Accepts only non-negative values
+  -e <val>   channel selection: mono or stereo
   -s <vals>  scroll rate (pixels per second) and start delay (seconds), up
              to four comma separated decimal values (default: %.1f,%.1f) as:
                 rate_all
@@ -200,7 +203,7 @@ void OledOpts::process_command_line(int argc, char **argv)
 
   handle_long_opts(argc, argv);
 
-  while ((c = getopt(argc, argv, ":ho:b:g:f:A:G:s:C:dP:kc:RI:a:B:r:D:S:p:t:F:T:")) != -1) {
+  while ((c = getopt(argc, argv, ":ho:b:g:f:A:G:s:C:dP:kc:RI:a:B:r:D:S:p:t:F:T:e:")) != -1) {
     if (common_opts(c, optopt))
       continue;
 
@@ -228,6 +231,16 @@ void OledOpts::process_command_line(int argc, char **argv)
       print_status_or_exit(read_int(optarg, &sensitivity), c);
       if (sensitivity < 0)
         error("only positive values accepted", c);
+      break;
+
+    case 'e':
+      print_status_or_exit(read_int(optarg, &channel_sel), c);
+      if (channel_sel == 1)
+        channel = "mono";
+      else if (channel_sel == 2)
+        channel = "stereo";
+      else
+        error("only 1 or 2 accepted", c);
       break;
 
     case 'g':
@@ -393,8 +406,8 @@ void OledOpts::process_command_line(int argc, char **argv)
 
     case 'T': {
       print_status_or_exit(read_int(optarg, &spectrum_type), c);
-      if (spectrum_type < 0 || spectrum_type > 2)
-        error("only value from 0 to 2", c);
+      if (spectrum_type < 0 || spectrum_type > 5)
+        error("only value from 0 to 5", c);
       break;
     }
 
@@ -423,7 +436,7 @@ void OledOpts::process_command_line(int argc, char **argv)
 }
 
 string print_config_file(int bars, int autosens, int sensitivity, int framerate, string cava_method,
-                         string cava_source, string fifo_path_cava_out)
+                         string cava_source, string channel, string fifo_path_cava_out)
 {
   char templt[] = "/tmp/cava_config_XXXXXX";
   int fd = mkstemp(templt);
@@ -447,10 +460,10 @@ string print_config_file(int bars, int autosens, int sensitivity, int framerate,
           "[output]\n"
           "method = raw\n"
           "data_format = binary\n"
-          "channels = mono\n"
+          "channels = %s\n"
           "raw_target = %s\n"
           "bit_format = 8bit\n",
-          framerate, bars, autosens, sensitivity, cava_method.c_str(), cava_source.c_str(),
+          framerate, bars, autosens, sensitivity, cava_method.c_str(), cava_source.c_str(), channel.c_str(),
           fifo_path_cava_out.c_str());
   fclose(ofile);
   return templt;
@@ -485,6 +498,12 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
         draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
       else if (spectrum_type == 2)
         draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
+      else if (spectrum_type == 3)
+        draw_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
+      else if (spectrum_type == 4)
+        draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
+      else if (spectrum_type == 5)
+        draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
       draw_connection(display, 128 - 2 * W, 0, disp_info.conn);
       draw_triangle_slider(display, 128 - 5 * W, 1, 11, 6,
                            disp_info.status.get_volume());
@@ -516,6 +535,12 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
         draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
       else if (spectrum_type == 2)
         draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
+      else if (spectrum_type == 3)
+        draw_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
+      else if (spectrum_type == 4)
+        draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
+      else if (spectrum_type == 5)
+        draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
       if (disp_info.status.get_kbitrate() > 0)
         draw_text(display, 128-5*W, 6*H+4, 4, disp_info.status.get_kbitrate_str());
         draw_text(display, 128-1*W, 6*H+4, 1, "k");
@@ -538,6 +563,12 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
       else if (spectrum_type == 1)
         draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
       else if (spectrum_type == 2)
+        draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
+      else if (spectrum_type == 3)
+        draw_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
+      else if (spectrum_type == 4)
+        draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
+      else if (spectrum_type == 5)
         draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
     }
 }
@@ -697,7 +728,7 @@ int main(int argc, char **argv)
   // Create a temporary config file for cava
   string config_file_name =
       print_config_file(opts.bars, opts.autosens, opts.sensitivity, opts.framerate, opts.cava_method,
-                        opts.cava_source, fifo_path_cava_out);
+                        opts.cava_source, opts.channel, fifo_path_cava_out);
   if (config_file_name == "")
     opts.error("could not create cava config file: " + string(strerror(errno)));
 
