@@ -35,8 +35,9 @@ to install Cava again, but to use the installled version you must use
 Download, build and install Cava. These commands build a reduced
 feature-set executable called `mpd_oled_cava`.
 ```
-git clone https://github.com/karlstav/cava
+git clone https://github.com/dmd79/cava
 cd cava
+git checkout moode
 ./autogen.sh
 ./configure --disable-input-portaudio --disable-input-sndio --disable-output-ncurses --disable-input-pulse --program-prefix=mpd_oled_
 make
@@ -48,8 +49,9 @@ sudo make install-strip
 Download, build and install mpd_oled.
 ```
 cd ..   # if you are still in the cava source directory
-git clone https://github.com/antiprism/mpd_oled
+git clone https://github.com/dmd79/mpd_oled
 cd mpd_oled
+git checkout moode
 ./bootstrap
 CPPFLAGS="-W -Wall -Wno-psabi" ./configure --prefix=/usr/local
 make
