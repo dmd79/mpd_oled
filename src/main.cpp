@@ -48,9 +48,9 @@ using std::vector;
 
 int SPECT_WIDTH = 64;
 int full_spectrum = 0;         // 0 standard view, 1 large spectrum, 2 full spectrum
-int spectrum_type = 0;         // 0,3 full filled spectrum, 1,4 dot spectrum, 2,5 vu meter
+int spectrum_type = 0;         // 0 filled, 1 filled+peaks, 2 dot, 3 inv, 4 inv+peaks, 5 VU filled, 6 VU filled+peaks, 7 VU dot, 8 VU inv, 9 VU inv+peaks
 int display_auto_off;          // -1 always on, from 0 to 3600 sec display timeout
-
+  
 ArduiPi_OLED display; // global, for use during signal handling
 
 void cleanup(void)
@@ -203,8 +203,7 @@ void OledOpts::process_command_line(int argc, char **argv)
 
   handle_long_opts(argc, argv);
 
-  while ((c = getopt(argc, argv, ":ho:b:g:f:A:G:s:C:dP:kc:RI:a:B:r:D:S:p:t:F:T:e:")) !=
-         -1) {
+  while ((c = getopt(argc, argv, ":ho:b:g:f:A:G:s:C:dP:kc:RI:a:B:r:D:S:p:t:F:T:e:")) != -1) {
     if (common_opts(c, optopt))
       continue;
 
@@ -390,7 +389,7 @@ void OledOpts::process_command_line(int argc, char **argv)
       player.set_name(arg_id);
       break;
     }
-
+    
     case 't': {
       print_status_or_exit(read_int(optarg, &display_auto_off), c);
       if (display_auto_off < -1 || display_auto_off > 3600)
@@ -407,8 +406,8 @@ void OledOpts::process_command_line(int argc, char **argv)
 
     case 'T': {
       print_status_or_exit(read_int(optarg, &spectrum_type), c);
-      if (spectrum_type < 0 || spectrum_type > 5)
-        error("only value from 0 to 5", c);
+      if (spectrum_type < 0 || spectrum_type > 9)
+        error("only value from 0 to 9", c);
       break;
     }
 
@@ -452,7 +451,7 @@ string print_config_file(int bars, int autosens, int sensitivity, int framerate,
           "framerate = %d\n"
           "bars = %d\n"
           "autosens = %d\n"
-          "sensitivity = %d\n"
+          "sensitivity = %d\n" 
           "\n"
           "[input]\n"
           "method = %s\n"
@@ -468,36 +467,6 @@ string print_config_file(int bars, int autosens, int sensitivity, int framerate,
           fifo_path_cava_out.c_str());
   fclose(ofile);
   return templt;
-}
-
-Status start_cava(FILE **p_fifo_file, const OledOpts &opts)
-{
-
-  // Create a FIFO for cava to write its raw output to
-  const string fifo_path_cava_out = msg_str("/tmp/cava_fifo_%d", getpid());
-  unlink(fifo_path_cava_out.c_str());
-  if (mkfifo(fifo_path_cava_out.c_str(), 0666) == -1)
-    opts.error("could not create cava output FIFO for writing: " +
-               string(strerror(errno)));
-
-  // Create a temporary config file for cava
-  string config_file_name =
-      print_config_file(opts.bars, opts.autosens, opts.sensitivity, opts.framerate, opts.cava_method,
-                        opts.cava_source, opts.channel, fifo_path_cava_out);
-  if (config_file_name == "")
-    opts.error("could not create cava config file: " + string(strerror(errno)));
-
-  // Create a pipe to a cava subprocess
-  string cava_cmd = opts.cava_prog_name + " -p " + config_file_name;
-  if (popen(cava_cmd.c_str(), "r") == NULL)
-    opts.error("could not start cava program: " + string(strerror(errno)));
-
-  // Create a file stream to read cava's raw output from
-  *p_fifo_file = fopen(fifo_path_cava_out.c_str(), "rb");
-  if (*p_fifo_file == NULL)
-    opts.error("could not open cava output FIFO for reading");
-
-  return Status::ok();
 }
 
 // Draw fullscreen 128x64 clock/date
@@ -521,20 +490,31 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
 {
   const int H = 8; // character height
   const int W = 6; // character width
+
+  // Spectrum type mapping:
+  // 0=filled, 1=filled+peaks, 2=dot, 3=inv, 4=inv+peaks
+  // 5=VU filled, 6=VU filled+peaks, 7=VU dot, 8=VU inv, 9=VU inv+peaks
+  spect_graph spect = disp_info.spect;
+  spect.show_peaks = (spectrum_type == 1 || spectrum_type == 4 ||
+                      spectrum_type == 6 || spectrum_type == 9);
+
+  // Map spectrum_type to base draw function: 0=filled, 1=dot, 2=inverted
+  // filled:   T 0,1,5,6  → draw_spectrum
+  // dot:      T 2,7      → draw_dot_spectrum
+  // inverted: T 3,4,8,9  → draw_inverted_spectrum
+  auto draw_spect = [&](int height) {
+    if (spectrum_type == 2 || spectrum_type == 7)
+      draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, height, spect);
+    else if (spectrum_type == 3 || spectrum_type == 4 ||
+             spectrum_type == 8 || spectrum_type == 9)
+      draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, height, spect);
+    else
+      draw_spectrum(display, 0, 0, SPECT_WIDTH, height, spect);
+  };
+
   if (full_spectrum == 0)
     {
-      if (spectrum_type == 0)
-        draw_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
-      else if (spectrum_type == 1)
-        draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
-      else if (spectrum_type == 2)
-        draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
-      else if (spectrum_type == 3)
-        draw_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
-      else if (spectrum_type == 4)
-        draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
-      else if (spectrum_type == 5)
-        draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 32, disp_info.spect);
+      draw_spect(32);
       draw_connection(display, 128 - 2 * W, 0, disp_info.conn);
       draw_triangle_slider(display, 128 - 5 * W, 1, 11, 6,
                            disp_info.status.get_volume());
@@ -560,18 +540,7 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
     }
   else if (full_spectrum == 1)
     {
-      if (spectrum_type == 0)
-        draw_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
-      else if (spectrum_type == 1)
-        draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
-      else if (spectrum_type == 2)
-        draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
-      else if (spectrum_type == 3)
-        draw_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
-      else if (spectrum_type == 4)
-        draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
-      else if (spectrum_type == 5)
-        draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 48, disp_info.spect);
+      draw_spect(48);
       if (disp_info.status.get_kbitrate() > 0)
         draw_text(display, 128-5*W, 6*H+4, 4, disp_info.status.get_kbitrate_str());
         draw_text(display, 128-1*W, 6*H+4, 1, "k");
@@ -589,18 +558,7 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
     }
   else if (full_spectrum == 2)
     {
-      if (spectrum_type == 0)
-        draw_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
-      else if (spectrum_type == 1)
-        draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
-      else if (spectrum_type == 2)
-        draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
-      else if (spectrum_type == 3)
-        draw_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
-      else if (spectrum_type == 4)
-        draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
-      else if (spectrum_type == 5)
-        draw_inverted_spectrum(display, 0, 0, SPECT_WIDTH, 64, disp_info.spect);
+      draw_spect(64);
     }
 }
 
@@ -654,12 +612,14 @@ bool get_invert(double period)
   return (period > 0) ? (fmod(time(0) / 3600.0, 2 * period) > period) : period;
 }
 
-int start_idle_loop(ArduiPi_OLED &display, const OledOpts &opts)
+int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
+                    const OledOpts &opts)
 {
   const double update_sec =
       1 / (0.9 * opts.framerate); // default update freq just under framerate
   const long select_usec =
       update_sec * 1100000; // slightly longer, but still less than framerate
+  int fifo_fd = fileno(fifo_file);
   Timer timer;
 
   display_info disp_info;
@@ -685,49 +645,40 @@ int start_idle_loop(ArduiPi_OLED &display, const OledOpts &opts)
     return 2;
   }
 
-  // Cava not yet started
-  int fifo_fd = -1;
-  FILE *fifo_file = nullptr;
-
-  int zero_read_cnt = 0; // number of consecutive reads of zero bytes
   while (true) {
+    fd_set set;
+    FD_ZERO(&set);
+    FD_SET(fifo_fd, &set);
+
+    // FIFO read timeout value
+    struct timeval timeout;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = select_usec; // slightly longer than timer
+
+    // If there is data read it all.
     int num_bars_read = 0;
-    if (fifo_fd >= 0) {
-      fd_set set;
-      FD_ZERO(&set);
-      FD_SET(fifo_fd, &set);
+    if (select(FD_SETSIZE, &set, NULL, NULL, &timeout) > 0) {
+      do {
+        num_bars_read =
+            fread(&disp_info.spect.heights[0], sizeof(unsigned char),
+                  disp_info.spect.heights.size(), fifo_file);
 
-      // FIFO read timeout value
-      struct timeval timeout;
-      timeout.tv_sec = 0;
-      timeout.tv_usec = select_usec; // slightly longer than timer
-
-      // If there is data read it all.
-      if (select(FD_SETSIZE, &set, NULL, NULL, &timeout) > 0) {
-        do {
-          num_bars_read =
-              fread(&disp_info.spect.heights[0], sizeof(unsigned char),
-                    disp_info.spect.heights.size(), fifo_file);
-
-          FD_ZERO(&set);
-          FD_SET(fifo_fd, &set);
-          timeout.tv_sec = 0;
-          timeout.tv_usec = 0;
-        } while (select(FD_SETSIZE, &set, NULL, NULL, &timeout) > 0);
-      }
+        FD_ZERO(&set);
+        FD_SET(fifo_fd, &set);
+        timeout.tv_sec = 0;
+        timeout.tv_usec = 0;
+      } while (select(FD_SETSIZE, &set, NULL, NULL, &timeout) > 0);
     }
 
-    if (num_bars_read == 0)
-      zero_read_cnt++;
-    else
-      zero_read_cnt = 0;
-
-    // Clear spectrum data if no data available or music not playing
-    if (zero_read_cnt > 1 || disp_info.status.get_state() != MPD_STATE_PLAY) {
+    // Clear spectrum data if no data read or music not playing
+    if (num_bars_read == 0 || disp_info.status.get_state() != MPD_STATE_PLAY) {
       std::fill(disp_info.spect.heights.begin(), disp_info.spect.heights.end(),
                 0);
       usleep(0.1 * 1000000); // 0.1 sec delay, don't idle too fast if no need
     }
+
+    // Update peak hold/decay state
+    disp_info.spect.update_peaks();
 
     // Update display if necessary
     if (timer.finished() || num_bars_read) {
@@ -739,18 +690,8 @@ int start_idle_loop(ArduiPi_OLED &display, const OledOpts &opts)
       display.display();
     }
 
-    if (timer.finished()) {
-      display.reset_offset();
-      if (disp_info.status.get_state() == MPD_STATE_PLAY && fifo_fd < 0) {
-	// delay cava start by 2 seconds (for Moode)
-	// https://github.com/antiprism/mpd_oled/issues/67
-        usleep(2 * 1000000);
-        opts.print_status_or_exit(start_cava(&fifo_file, opts));
-        fifo_fd = fileno(fifo_file);
-      }
-
+    if (timer.finished())
       timer.set_timer(update_sec); // Reset the timer
-    }
   }
 
   return 0;
@@ -769,9 +710,33 @@ int main(int argc, char **argv)
                     opts.rotate180))
     opts.error("could not initialise OLED");
 
+  // Create a FIFO for cava to write its raw output to
+  const string fifo_path_cava_out = msg_str("/tmp/cava_fifo_%d", getpid());
+  unlink(fifo_path_cava_out.c_str());
+  if (mkfifo(fifo_path_cava_out.c_str(), 0666) == -1)
+    opts.error("could not create cava output FIFO for writing: " +
+               string(strerror(errno)));
+
+  // Create a temporary config file for cava
+  string config_file_name =
+      print_config_file(opts.bars, opts.autosens, opts.sensitivity, opts.framerate, opts.cava_method,
+                        opts.cava_source, opts.channel, fifo_path_cava_out);
+  if (config_file_name == "")
+    opts.error("could not create cava config file: " + string(strerror(errno)));
+
+  // Create a pipe to a cava subprocess
+  string cava_cmd = opts.cava_prog_name + " -p " + config_file_name;
+  if (popen(cava_cmd.c_str(), "r") == NULL)
+    opts.error("could not start cava program: " + string(strerror(errno)));
+
+  // Create a file stream to read cava's raw output from
+  FILE *fifo_file = fopen(fifo_path_cava_out.c_str(), "rb");
+  if (fifo_file == NULL)
+    opts.error("could not open cava output FIFO for reading");
+
   init_signals();
   atexit(cleanup);
-  int loop_ret = start_idle_loop(display, opts);
+  int loop_ret = start_idle_loop(display, fifo_file, opts);
 
   if (loop_ret != 0)
     exit(EXIT_FAILURE);

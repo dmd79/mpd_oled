@@ -29,13 +29,45 @@
 #include <vector>
 
 struct spect_graph {
-  int gap;                            // size of gap in pixels
-  std::vector<unsigned char> heights; // bar heights
+  int gap;                             // size of gap in pixels
+  std::vector<unsigned char> heights;  // bar heights (current frame)
+  std::vector<unsigned char> peaks;    // peak hold heights
+  std::vector<int> peak_timers;        // frames remaining at current peak
+  bool show_peaks;                     // whether to draw peak dots
+
+  static const int PEAK_HOLD_FRAMES = 20;  // frames to hold peak before falling
+  static const int PEAK_DECAY_STEP  = 2;   // pixels to drop per frame after hold
 
   void init(int bars, int gap_sz)
   {
     gap = gap_sz;
+    show_peaks = false;
     heights.resize(bars, 0);
+    peaks.resize(bars, 0);
+    peak_timers.resize(bars, 0);
+  }
+
+  // Call once per frame, after heights[] has been updated with fresh cava data
+  void update_peaks()
+  {
+    for (int i = 0; i < (int)heights.size(); i++) {
+      if (heights[i] >= peaks[i]) {
+        // Bar is at or above current peak: latch it and reset hold timer
+        peaks[i] = heights[i];
+        peak_timers[i] = PEAK_HOLD_FRAMES;
+      }
+      else if (peak_timers[i] > 0) {
+        // Still in hold phase: count down
+        peak_timers[i]--;
+      }
+      else {
+        // Decay phase: drop the peak dot
+        if (peaks[i] > PEAK_DECAY_STEP)
+          peaks[i] -= PEAK_DECAY_STEP;
+        else
+          peaks[i] = 0;
+      }
+    }
   }
 };
 

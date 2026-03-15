@@ -58,9 +58,16 @@ int draw_spectrum(ArduiPi_OLED &display, int x_start, int y_start, int width,
     // map vals range to graph ht
     int val = bar_height_max * spect.heights[i] / 255.0 + 1;
     int x = x_start + i * (bar_width + gap);
-    // int y = y_start+2;
     if (val)
       display.fillRect(x, y_start + height - val, bar_width, val, WHITE);
+
+    // Draw peak dot (1 pixel tall, full bar width)
+    if (spect.show_peaks) {
+      int peak_val = bar_height_max * spect.peaks[i] / 255.0 + 1;
+      int peak_y = y_start + height - peak_val - 1;
+      if (peak_val > val && peak_y >= y_start)
+        display.drawFastHLine(x, peak_y, bar_width, WHITE);
+    }
   }
   return 0;
 }
@@ -85,7 +92,6 @@ int draw_dot_spectrum(ArduiPi_OLED &display, int x_start, int y_start, int width
     // map vals range to graph ht
     int val = bar_height_max * spect.heights[i] / 255.0 + 1;
     int x = x_start + i * (bar_width + gap);
-    // int y = y_start+2;
     if (val)
       display.drawFastHLine(x, y_start + height - val, bar_width, WHITE);
   }
@@ -115,6 +121,14 @@ int draw_inverted_spectrum(ArduiPi_OLED &display, int x_start, int y_start, int 
     // int y = y_start+2;
     if (val)
       display.fillRect(x, y_start, bar_width, height - val, WHITE);
+
+    // Draw peak dot as a dark (BLACK) line on the white background
+    if (spect.show_peaks) {
+      int peak_val = bar_height_max * spect.peaks[i] / 255.0 + 1;
+      int peak_y = y_start + height - peak_val;
+      if (peak_val > val && peak_y >= y_start && peak_y < y_start + height)
+        display.drawFastHLine(x, peak_y, bar_width, BLACK);
+    }
   }
   return 0;
 }
