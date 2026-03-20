@@ -30,6 +30,7 @@
 #include "utils.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <locale.h>
 #include <pthread.h>
 #include <signal.h>
@@ -49,6 +50,12 @@ using std::vector;
 int SPECT_WIDTH = 64;
 int full_spectrum = 0;         // 0 standard view, 1 large spectrum, 2 full spectrum
 int spectrum_type = 0;         // 0 filled, 1 filled+peaks, 2 dot, 3 inv, 4 inv+peaks, 5 VU filled, 6 VU filled+peaks, 7 VU dot, 8 VU inv, 9 VU inv+peaks
+
+#define SPECTRUM_TYPE_MAX 9
+#define FULL_SPECTRUM_MAX 2
+
+static const char *CTRL_PIPE_PATH = "/tmp/mpd_oled_ctrl";
+static bool screensaver_active = false;
 int display_auto_off;          // -1 always on, from 0 to 3600 sec display timeout
   
 ArduiPi_OLED display; // global, for use during signal handling
@@ -60,6 +67,8 @@ void cleanup(void)
   display.clearDisplay();
   display.display();
   display.close();
+  // Remove control pipe
+  unlink(CTRL_PIPE_PATH);
 }
 
 void signal_handler(int sig)
@@ -121,6 +130,7 @@ public:
   int spi_dc_gpio = OLED_SPI_DC; // SPI DC
   int spi_cs = OLED_SPI_CS0;     // SPI CS - 0: CS0, 1: CS1
   Player player;
+  string state_file = "/home/pi/mpd_oled/state"; // persistent state file
 
   OledOpts() : ProgramOpts("mpd_oled", "0.02")
   {
@@ -203,7 +213,7 @@ void OledOpts::process_command_line(int argc, char **argv)
 
   handle_long_opts(argc, argv);
 
-  while ((c = getopt(argc, argv, ":ho:b:g:f:A:G:s:C:dP:kc:RI:a:B:r:D:S:p:t:F:T:e:")) != -1) {
+  while ((c = getopt(argc, argv, ":ho:b:g:f:A:G:s:C:dP:kc:RI:a:B:r:D:S:p:t:F:T:e:L:")) != -1) {
     if (common_opts(c, optopt))
       continue;
 
@@ -411,6 +421,10 @@ void OledOpts::process_command_line(int argc, char **argv)
       break;
     }
 
+    case 'L':
+      state_file = optarg;
+      break;
+
     default:
       error("unknown command line error");
     }
@@ -612,8 +626,123 @@ bool get_invert(double period)
   return (period > 0) ? (fmod(time(0) / 3600.0, 2 * period) > period) : period;
 }
 
+// Parameters for each spectrum type (indexed by spectrum_type 0-9)
+struct SpectParams {
+  int bars;
+  int gap;
+  int sensitivity;
+  const char *channel;  // "mono" or "stereo"
+};
+
+static const SpectParams spect_params[SPECTRUM_TYPE_MAX + 1] = {
+  {32, 1,  16,   "mono"},   // 0 filled
+  {32, 1,  16,   "mono"},   // 1 filled+peaks
+  {32, 1,  16,   "mono"},   // 2 dot
+  {32, 1,  16,   "mono"},   // 3 inverted
+  {32, 1,  16,   "mono"},   // 4 inverted+peaks
+  {2,  10, 420, "stereo"}, // 5 VU filled
+  {2,  10, 420, "stereo"}, // 6 VU filled+peaks
+  {2,  10, 420, "stereo"}, // 7 VU dot
+  {2,  10, 420, "stereo"}, // 8 VU inverted
+  {2,  10, 420, "stereo"}, // 9 VU inverted+peaks
+};
+
+// Restart CAVA with parameters for the current spectrum_type.
+// Returns the new fifo_file, or NULL on error.
+// Caller must update opts and disp_info after this call.
+FILE *restart_cava(OledOpts &opts, const string &fifo_path_cava_out,
+                   display_info &disp_info)
+{
+  // Kill existing cava
+  string kill_cmd = "killall " + opts.cava_prog_name + " 2>/dev/null";
+  system(kill_cmd.c_str());
+  usleep(200000); // 200ms for cava to die
+
+  // Close old fifo
+  // (caller holds fifo_file, we can't fclose it here — handled in loop)
+
+  // Update opts from table
+  const SpectParams &p = spect_params[spectrum_type];
+  opts.bars        = p.bars;
+  opts.gap         = p.gap;
+  opts.sensitivity = p.sensitivity;
+  opts.channel     = p.channel;
+
+  // Resize spectrum buffers
+  disp_info.spect.init(opts.bars, opts.gap);
+
+  // Write new cava config
+  string config_file_name =
+      print_config_file(opts.bars, opts.autosens, opts.sensitivity,
+                        opts.framerate, opts.cava_method, opts.cava_source,
+                        opts.channel, fifo_path_cava_out);
+  if (config_file_name.empty())
+    return NULL;
+
+  // Reopen fifo (flush stale data)
+  // Start new cava
+  string cava_cmd = opts.cava_prog_name + " -p " + config_file_name + " &";
+  system(cava_cmd.c_str());
+  usleep(300000); // 300ms for cava to start and open the fifo
+
+  FILE *new_fifo = fopen(fifo_path_cava_out.c_str(), "rb");
+  return new_fifo;
+}
+
+// Draw random noise on the entire display (anti burn-in screensaver)
+void draw_screensaver(ArduiPi_OLED &display)
+{
+  display.clearDisplay();
+  for (int y = 0; y < 64; y++)
+    for (int x = 0; x < 128; x++)
+      if (rand() & 1)
+        display.drawPixel(x, y, WHITE);
+  display.display();
+}
+
+// Read a command from the ctrl pipe (non-blocking).
+// Returns the command string, or empty if nothing available.
+string read_ctrl_cmd(int pipe_fd)
+{
+  char buf[64] = {};
+  int n = read(pipe_fd, buf, sizeof(buf) - 1);
+  if (n <= 0)
+    return "";
+  // Strip newline
+  for (int i = 0; i < n; i++)
+    if (buf[i] == '\n' || buf[i] == '\r') { buf[i] = '\0'; break; }
+  return string(buf);
+}
+
+// Load spectrum_type and full_spectrum from state file
+void load_state(const string &path)
+{
+  FILE *f = fopen(path.c_str(), "r");
+  if (!f)
+    return;
+  int t = 0, fs = 0;
+  if (fscanf(f, "%d %d", &t, &fs) == 2) {
+    if (t >= 0 && t <= SPECTRUM_TYPE_MAX)
+      spectrum_type = t;
+    if (fs >= 0 && fs <= FULL_SPECTRUM_MAX)
+      full_spectrum = fs;
+  }
+  fclose(f);
+}
+
+// Save spectrum_type and full_spectrum to state file (best-effort)
+void save_state(const string &path)
+{
+  FILE *f = fopen(path.c_str(), "w");
+  if (!f)
+    return;
+  fprintf(f, "%d %d\n", spectrum_type, full_spectrum);
+  fclose(f);
+}
+
 int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
-                    const OledOpts &opts)
+                    OledOpts &opts, int pipe_fd,
+                    const string &fifo_path_cava_out)
 {
   const double update_sec =
       1 / (0.9 * opts.framerate); // default update freq just under framerate
@@ -646,6 +775,57 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
   }
 
   while (true) {
+
+    // --- Check control pipe for commands (non-blocking) ---
+    fd_set ctrl_set;
+    FD_ZERO(&ctrl_set);
+    FD_SET(pipe_fd, &ctrl_set);
+    struct timeval zero_tv = {0, 0};
+    if (select(pipe_fd + 1, &ctrl_set, NULL, NULL, &zero_tv) > 0) {
+      string cmd = read_ctrl_cmd(pipe_fd);
+      if (!cmd.empty()) {
+        if (cmd == "screensaver") {
+          screensaver_active = true;
+        }
+        else {
+          screensaver_active = false;
+          if (cmd == "next_type")
+            spectrum_type = (spectrum_type + 1) % (SPECTRUM_TYPE_MAX + 1);
+          else if (cmd == "prev_type")
+            spectrum_type = (spectrum_type + SPECTRUM_TYPE_MAX) % (SPECTRUM_TYPE_MAX + 1);
+          else if (cmd == "next_screen")
+            full_spectrum = (full_spectrum + 1) % (FULL_SPECTRUM_MAX + 1);
+          else if (cmd == "prev_screen")
+            full_spectrum = (full_spectrum + FULL_SPECTRUM_MAX) % (FULL_SPECTRUM_MAX + 1);
+
+          // Update SPECT_WIDTH when screen changes
+          if (cmd == "next_screen" || cmd == "prev_screen")
+            SPECT_WIDTH = (full_spectrum == 0) ? 64 : 128;
+
+          // Restart CAVA on any type change
+          if (cmd == "next_type" || cmd == "prev_type") {
+            fclose(fifo_file);
+            fifo_file = restart_cava(opts, fifo_path_cava_out, disp_info);
+            if (fifo_file == NULL) {
+              fprintf(stderr, "error: could not restart cava\n");
+              return 3;
+            }
+            fifo_fd = fileno(fifo_file);
+          }
+          // Persist state across reboots
+          save_state(opts.state_file);
+        }
+      }
+    }
+
+    // --- Screensaver mode ---
+    if (screensaver_active) {
+      draw_screensaver(display);
+      usleep(100000); // 100ms between frames
+      continue;
+    }
+
+    // --- Normal spectrum/display mode ---
     fd_set set;
     FD_ZERO(&set);
     FD_SET(fifo_fd, &set);
@@ -653,7 +833,7 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
     // FIFO read timeout value
     struct timeval timeout;
     timeout.tv_sec = 0;
-    timeout.tv_usec = select_usec; // slightly longer than timer
+    timeout.tv_usec = select_usec;
 
     // If there is data read it all.
     int num_bars_read = 0;
@@ -704,11 +884,38 @@ int main(int argc, char **argv)
   OledOpts opts;
   opts.process_command_line(argc, argv);
 
-  // Set up the OLED doisplay
+  // Set up the OLED display
   if (!init_display(display, opts.oled, opts.i2c_addr, opts.i2c_bus,
                     opts.reset_gpio, opts.spi_dc_gpio, opts.spi_cs,
                     opts.rotate180))
     opts.error("could not initialise OLED");
+
+  // Create the control pipe (non-blocking read end)
+  unlink(CTRL_PIPE_PATH);
+  if (mkfifo(CTRL_PIPE_PATH, 0666) == -1)
+    opts.error("could not create control pipe: " + string(strerror(errno)));
+  chmod(CTRL_PIPE_PATH, 0666);
+  int pipe_fd = open(CTRL_PIPE_PATH, O_RDONLY | O_NONBLOCK);
+  if (pipe_fd < 0)
+    opts.error("could not open control pipe: " + string(strerror(errno)));
+
+  // Load persisted state (spectrum_type, full_spectrum)
+  load_state(opts.state_file);
+
+  // Apply cava params for the loaded spectrum_type
+  {
+    const SpectParams &p = spect_params[spectrum_type];
+    opts.bars        = p.bars;
+    opts.gap         = p.gap;
+    opts.sensitivity = p.sensitivity;
+    opts.channel     = p.channel;
+  }
+
+  // Update SPECT_WIDTH based on loaded full_spectrum
+  if (full_spectrum == 0)
+    SPECT_WIDTH = 64;
+  else
+    SPECT_WIDTH = 128;
 
   // Create a FIFO for cava to write its raw output to
   const string fifo_path_cava_out = msg_str("/tmp/cava_fifo_%d", getpid());
@@ -736,7 +943,8 @@ int main(int argc, char **argv)
 
   init_signals();
   atexit(cleanup);
-  int loop_ret = start_idle_loop(display, fifo_file, opts);
+  int loop_ret = start_idle_loop(display, fifo_file, opts, pipe_fd,
+                                 fifo_path_cava_out);
 
   if (loop_ret != 0)
     exit(EXIT_FAILURE);
