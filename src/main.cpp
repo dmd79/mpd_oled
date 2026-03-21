@@ -822,10 +822,16 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
       string cmd = read_ctrl_cmd(pipe_fd);
       if (!cmd.empty()) {
         if (cmd == "screensaver") {
-          screensaver_active = true;
+          // Toggle: mute key turns on/off
+          screensaver_active = !screensaver_active;
+        }
+        else if (cmd == "screensaver_off") {
+          // Explicit off: sent by all other keys when screensaver may be active
+          screensaver_active = false;
         }
         else {
           screensaver_active = false;
+
           if (cmd == "next_type")
             spectrum_type = (spectrum_type + 1) % (SPECTRUM_TYPE_MAX + 1);
           else if (cmd == "prev_type")
