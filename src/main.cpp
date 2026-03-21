@@ -40,6 +40,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <math.h>
 #include <string>
 #include <vector>
@@ -56,6 +57,36 @@ int spectrum_type = 0;         // 0 filled, 1 filled+peaks, 2 dot, 3 inv, 4 inv+
 
 static const char *CTRL_PIPE_PATH = "/tmp/mpd_oled_ctrl";
 static bool screensaver_active = false;
+
+// Preset steps for display bars — separate tables and indices for 64px and 128px
+// Each screen remembers its own bars setting independently
+struct BarsPreset { int bars, gap; };
+
+static const BarsPreset bars_presets_64[] = {
+  {  6, 2 },   // bw=8 on 64px, 2px free
+  { 16, 2 },   // bw=2 on 64px, 2px free  (default)
+  { 21, 1 },   // bw=2 on 64px, 2px free
+};
+static const int NUM_BARS_PRESETS_64 = 3;
+static int bars_preset_idx_64 = 1; // default: 16 bars
+
+static const BarsPreset bars_presets_128[] = {
+  {  6, 6 },   // bw=16 on 128px, 2px free
+  { 16, 2 },   // bw=6  on 128px, 2px free  (default)
+  { 32, 1 },   // bw=3  on 128px, 1px free
+};
+static const int NUM_BARS_PRESETS_128 = 3;
+static int bars_preset_idx_128 = 1; // default: 16 bars
+
+static int current_display_bars() {
+  return (SPECT_WIDTH == 64) ? bars_presets_64[bars_preset_idx_64].bars
+                             : bars_presets_128[bars_preset_idx_128].bars;
+}
+static int current_display_gap() {
+  return (SPECT_WIDTH == 64) ? bars_presets_64[bars_preset_idx_64].gap
+                             : bars_presets_128[bars_preset_idx_128].gap;
+}
+
 int display_auto_off;          // -1 always on, from 0 to 3600 sec display timeout
   
 ArduiPi_OLED display; // global, for use during signal handling
@@ -513,9 +544,9 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
                       spectrum_type == 6 || spectrum_type == 9);
 
   // Map spectrum_type to base draw function: 0=filled, 1=dot, 2=inverted
-  // filled:   T 0,1,5,6  → draw_spectrum
-  // dot:      T 2,7      → draw_dot_spectrum
-  // inverted: T 3,4,8,9  → draw_inverted_spectrum
+  // filled:   T 0,1,5,6  -> draw_spectrum
+  // dot:      T 2,7      -> draw_dot_spectrum
+  // inverted: T 3,4,8,9  -> draw_inverted_spectrum
   auto draw_spect = [&](int height) {
     if (spectrum_type == 2 || spectrum_type == 7)
       draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, height, spect);
@@ -658,15 +689,19 @@ FILE *restart_cava(OledOpts &opts, const string &fifo_path_cava_out,
   system(kill_cmd.c_str());
   usleep(200000); // 200ms for cava to die
 
-  // Close old fifo
-  // (caller holds fifo_file, we can't fclose it here — handled in loop)
-
   // Update opts from table
   const SpectParams &p = spect_params[spectrum_type];
-  opts.bars        = p.bars;
-  opts.gap         = p.gap;
   opts.sensitivity = p.sensitivity;
   opts.channel     = p.channel;
+
+  // For mono types use the current screen bars preset, for stereo use table
+  if (spectrum_type < 5) {
+    opts.bars = current_display_bars();
+    opts.gap  = current_display_gap();
+  } else {
+    opts.bars = p.bars;
+    opts.gap  = p.gap;
+  }
 
   // Resize spectrum buffers
   disp_info.spect.init(opts.bars, opts.gap);
@@ -679,7 +714,6 @@ FILE *restart_cava(OledOpts &opts, const string &fifo_path_cava_out,
   if (config_file_name.empty())
     return NULL;
 
-  // Reopen fifo (flush stale data)
   // Start new cava
   string cava_cmd = opts.cava_prog_name + " -p " + config_file_name + " &";
   system(cava_cmd.c_str());
@@ -714,29 +748,32 @@ string read_ctrl_cmd(int pipe_fd)
   return string(buf);
 }
 
-// Load spectrum_type and full_spectrum from state file
+// Load state from file (spectrum_type, full_spectrum, bars_idx_64, bars_idx_128)
 void load_state(const string &path)
 {
   FILE *f = fopen(path.c_str(), "r");
   if (!f)
     return;
-  int t = 0, fs = 0;
-  if (fscanf(f, "%d %d", &t, &fs) == 2) {
+  int t = 0, fs = 0, bi64 = 1, bi128 = 1;
+  if (fscanf(f, "%d %d %d %d", &t, &fs, &bi64, &bi128) >= 2) {
     if (t >= 0 && t <= SPECTRUM_TYPE_MAX)
       spectrum_type = t;
     if (fs >= 0 && fs <= FULL_SPECTRUM_MAX)
       full_spectrum = fs;
+    if (bi64  >= 0 && bi64  < NUM_BARS_PRESETS_64)  bars_preset_idx_64  = bi64;
+    if (bi128 >= 0 && bi128 < NUM_BARS_PRESETS_128) bars_preset_idx_128 = bi128;
   }
   fclose(f);
 }
 
-// Save spectrum_type and full_spectrum to state file (best-effort)
+// Save state to file (best-effort)
 void save_state(const string &path)
 {
   FILE *f = fopen(path.c_str(), "w");
   if (!f)
     return;
-  fprintf(f, "%d %d\n", spectrum_type, full_spectrum);
+  fprintf(f, "%d %d %d %d\n", spectrum_type, full_spectrum,
+          bars_preset_idx_64, bars_preset_idx_128);
   fclose(f);
 }
 
@@ -797,13 +834,27 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
             full_spectrum = (full_spectrum + 1) % (FULL_SPECTRUM_MAX + 1);
           else if (cmd == "prev_screen")
             full_spectrum = (full_spectrum + FULL_SPECTRUM_MAX) % (FULL_SPECTRUM_MAX + 1);
+          else if (cmd == "bars_up" && spectrum_type < 5) {
+            if (SPECT_WIDTH == 64)
+              bars_preset_idx_64  = std::min(NUM_BARS_PRESETS_64  - 1, bars_preset_idx_64  + 1);
+            else
+              bars_preset_idx_128 = std::min(NUM_BARS_PRESETS_128 - 1, bars_preset_idx_128 + 1);
+          }
+          else if (cmd == "bars_down" && spectrum_type < 5) {
+            if (SPECT_WIDTH == 64)
+              bars_preset_idx_64  = std::max(0, bars_preset_idx_64  - 1);
+            else
+              bars_preset_idx_128 = std::max(0, bars_preset_idx_128 - 1);
+          }
 
           // Update SPECT_WIDTH when screen changes
           if (cmd == "next_screen" || cmd == "prev_screen")
             SPECT_WIDTH = (full_spectrum == 0) ? 64 : 128;
 
-          // Restart CAVA on any type change
-          if (cmd == "next_type" || cmd == "prev_type") {
+          // Restart CAVA on type, bars or screen change (mono types only)
+          if (cmd == "next_type" || cmd == "prev_type" ||
+              cmd == "bars_up"   || cmd == "bars_down" ||
+              ((cmd == "next_screen" || cmd == "prev_screen") && spectrum_type < 5)) {
             fclose(fifo_file);
             fifo_file = restart_cava(opts, fifo_path_cava_out, disp_info);
             if (fifo_file == NULL) {
@@ -812,6 +863,7 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
             }
             fifo_fd = fileno(fifo_file);
           }
+
           // Persist state across reboots
           save_state(opts.state_file);
         }
@@ -899,23 +951,26 @@ int main(int argc, char **argv)
   if (pipe_fd < 0)
     opts.error("could not open control pipe: " + string(strerror(errno)));
 
-  // Load persisted state (spectrum_type, full_spectrum)
+  // Load persisted state (spectrum_type, full_spectrum, bars indices)
   load_state(opts.state_file);
+
+  // Update SPECT_WIDTH based on loaded full_spectrum
+  SPECT_WIDTH = (full_spectrum == 0) ? 64 : 128;
 
   // Apply cava params for the loaded spectrum_type
   {
     const SpectParams &p = spect_params[spectrum_type];
-    opts.bars        = p.bars;
-    opts.gap         = p.gap;
     opts.sensitivity = p.sensitivity;
     opts.channel     = p.channel;
+    // For mono types use the current screen bars preset, for stereo use table
+    if (spectrum_type < 5) {
+      opts.bars = current_display_bars();
+      opts.gap  = current_display_gap();
+    } else {
+      opts.bars = p.bars;
+      opts.gap  = p.gap;
+    }
   }
-
-  // Update SPECT_WIDTH based on loaded full_spectrum
-  if (full_spectrum == 0)
-    SPECT_WIDTH = 64;
-  else
-    SPECT_WIDTH = 128;
 
   // Create a FIFO for cava to write its raw output to
   const string fifo_path_cava_out = msg_str("/tmp/cava_fifo_%d", getpid());
