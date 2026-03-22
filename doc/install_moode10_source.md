@@ -19,7 +19,7 @@ default username 'pi', default password 'moodeaudio').
 Install all the packages needed to build and run cava and mpd_oled
 ```
 sudo apt update
-sudo apt install autoconf make libtool libfftw3-dev libiniparser-dev libmpdclient-dev libi2c-dev i2c-tools lm-sensors git libasound2-dev
+sudo apt install autoconf make libtool libfftw3-dev libiniparser-dev libmpdclient-dev libi2c-dev i2c-tools lm-sensors git libasound2-dev autoconf-archive
 ```
 
 ## Build and install cava
@@ -136,7 +136,7 @@ An example command, for a generic I2C SH1106 display (OLED type 6) with
 a display of 10 bars and a gap of 1 pixel between bars and a framerate
 of 20Hz is
 ```
-sudo mpd_oled_service_edit -o 6 -b 21 -g 1 -f 20 -c alsa,plughw:Loopback,1
+sudo mpd_oled_service_edit -o 1 -A 0 -f 30 -R -t 120 -c alsa,plughw:Loopback,1
 ```
 
 **For I2C OLEDs** (mpd_oled -o 3, 4 or 6) you may need to specify the I2C
