@@ -422,7 +422,6 @@ void OledOpts::process_command_line(int argc, char **argv)
       break;
 
     case 'p': {
-      // const char *params = "mpd|moode|volumio|runeaudio\n";
       string params = Player::all_names("|");
       string arg_id;
       if (!get_arg_id(optarg, &arg_id, params.c_str()))
@@ -536,17 +535,10 @@ void draw_spect_display(ArduiPi_OLED &display, const display_info &disp_info)
   const int H = 8; // character height
   const int W = 6; // character width
 
-  // Spectrum type mapping:
-  // 0=filled, 1=filled+peaks, 2=dot, 3=inv, 4=inv+peaks
-  // 5=VU filled, 6=VU filled+peaks, 7=VU dot, 8=VU inv, 9=VU inv+peaks
   spect_graph spect = disp_info.spect;
   spect.show_peaks = (spectrum_type == 1 || spectrum_type == 4 ||
                       spectrum_type == 6 || spectrum_type == 9);
 
-  // Map spectrum_type to base draw function: 0=filled, 1=dot, 2=inverted
-  // filled:   T 0,1,5,6  -> draw_spectrum
-  // dot:      T 2,7      -> draw_dot_spectrum
-  // inverted: T 3,4,8,9  -> draw_inverted_spectrum
   auto draw_spect = [&](int height) {
     if (spectrum_type == 2 || spectrum_type == 7)
       draw_dot_spectrum(display, 0, 0, SPECT_WIDTH, height, spect);
@@ -678,11 +670,9 @@ static const SpectParams spect_params[SPECTRUM_TYPE_MAX + 1] = {
   {2,  10, 420, "stereo"}, // 9 VU inverted+peaks
 };
 
-// Restart CAVA with parameters for the current spectrum_type.
-// Returns the new fifo_file, or NULL on error.
-// Caller must update opts and disp_info after this call.
+// override_sensitivity: -1 = use table value, >=0 = override (not persisted)
 FILE *restart_cava(OledOpts &opts, const string &fifo_path_cava_out,
-                   display_info &disp_info)
+                   display_info &disp_info, int override_sensitivity = -1)
 {
   // Kill existing cava
   string kill_cmd = "killall " + opts.cava_prog_name + " 2>/dev/null";
@@ -691,7 +681,7 @@ FILE *restart_cava(OledOpts &opts, const string &fifo_path_cava_out,
 
   // Update opts from table
   const SpectParams &p = spect_params[spectrum_type];
-  opts.sensitivity = p.sensitivity;
+  opts.sensitivity = (override_sensitivity >= 0) ? override_sensitivity : p.sensitivity;
   opts.channel     = p.channel;
 
   // For mono types use the current screen bars preset, for stereo use table
@@ -735,16 +725,15 @@ void draw_screensaver(ArduiPi_OLED &display)
 }
 
 // Read a command from the ctrl pipe (non-blocking).
-// Returns the command string, or empty if nothing available.
+// Strip \n, \r and \0 to handle null bytes added by some shells/tools.
 string read_ctrl_cmd(int pipe_fd)
 {
   char buf[64] = {};
   int n = read(pipe_fd, buf, sizeof(buf) - 1);
   if (n <= 0)
     return "";
-  // Strip newline
   for (int i = 0; i < n; i++)
-    if (buf[i] == '\n' || buf[i] == '\r') { buf[i] = '\0'; break; }
+    if (buf[i] == '\n' || buf[i] == '\r' || buf[i] == '\0') { buf[i] = '\0'; break; }
   return string(buf);
 }
 
@@ -797,8 +786,6 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
   disp_info.status.set_player(opts.player);
   disp_info.status.init();
 
-  // Update MPD info in separate thread to avoid stuttering in the spectrum
-  // animation.
   pthread_t update_info_thread;
   if (pthread_create(&update_info_thread, NULL, update_info,
                      (void *)(&disp_info))) {
@@ -822,11 +809,9 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
       string cmd = read_ctrl_cmd(pipe_fd);
       if (!cmd.empty()) {
         if (cmd == "screensaver") {
-          // Toggle: mute key turns on/off
           screensaver_active = !screensaver_active;
         }
         else if (cmd == "screensaver_off") {
-          // Explicit off: sent by all other keys when screensaver may be active
           screensaver_active = false;
         }
         else {
@@ -852,6 +837,20 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
             else
               bars_preset_idx_128 = std::max(0, bars_preset_idx_128 - 1);
           }
+          // --- SENSITIVITY RUNTIME CONTROL ---
+          // Usage: echo "sens:150" > /tmp/mpd_oled_ctrl
+          //        echo "sens:-1"  > /tmp/mpd_oled_ctrl  (reset to table default)
+          else if (cmd.size() > 5 && cmd.substr(0, 5) == "sens:") {
+            int new_sens = std::stoi(cmd.substr(5));
+            fclose(fifo_file);
+            fifo_file = restart_cava(opts, fifo_path_cava_out, disp_info, new_sens);
+            if (fifo_file == NULL) {
+              fprintf(stderr, "error: could not restart cava\n");
+              return 3;
+            }
+            fifo_fd = fileno(fifo_file);
+            // Do NOT save_state — sensitivity override not persisted
+          }
 
           // Update SPECT_WIDTH when screen changes
           if (cmd == "next_screen" || cmd == "prev_screen")
@@ -870,8 +869,9 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
             fifo_fd = fileno(fifo_file);
           }
 
-          // Persist state across reboots
-          save_state(opts.state_file);
+          // Persist state across reboots (not for sens: — intentional)
+          if (!(cmd.size() > 5 && cmd.substr(0, 5) == "sens:"))
+            save_state(opts.state_file);
         }
       }
     }
@@ -968,7 +968,6 @@ int main(int argc, char **argv)
     const SpectParams &p = spect_params[spectrum_type];
     opts.sensitivity = p.sensitivity;
     opts.channel     = p.channel;
-    // For mono types use the current screen bars preset, for stereo use table
     if (spectrum_type < 5) {
       opts.bars = current_display_bars();
       opts.gap  = current_display_gap();
