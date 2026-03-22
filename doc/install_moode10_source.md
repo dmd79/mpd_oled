@@ -1,11 +1,7 @@
-# Install instructions for Moode 8 using source
+# Install instructions for Moode 10 using source
 
 These instructions are for installing mpd_oled using source on
-Moode 8.
-
-A binary package is also available, but may not include the very
-latest code, see
-[Install instructions for Moode 8](install_moode8_deb.md).
+Moode 10.
 
 ## Base system
 
@@ -19,14 +15,14 @@ default username 'pi', default password 'moodeaudio').
 Install all the packages needed to build and run cava and mpd_oled
 ```
 sudo apt update
-sudo apt install autoconf make libtool libfftw3-dev libiniparser-dev libmpdclient-dev libi2c-dev i2c-tools lm-sensors git libasound2-dev
+sudo apt install autoconf make libtool libfftw3-dev libiniparser-dev libmpdclient-dev libi2c-dev i2c-tools lm-sensors git libasound2-dev autoconf-archive
 ```
 
 ## Build and install cava
 
 mpd_oled uses Cava, a bar spectrum audio visualizer, to calculate the spectrum
    
-   <https://github.com/karlstav/cava>
+   <https://github.com/dmd79/cava> forked from <https://github.com/karlstav/cava>
 
 If you have Cava installed (try running `cava -h`), there is no need
 to install Cava again, but to use the installled version you must use
@@ -136,7 +132,7 @@ An example command, for a generic I2C SH1106 display (OLED type 6) with
 a display of 10 bars and a gap of 1 pixel between bars and a framerate
 of 20Hz is
 ```
-sudo mpd_oled_service_edit -o 6 -b 21 -g 1 -f 20 -c alsa,plughw:Loopback,1
+sudo mpd_oled_service_edit -o 1 -A 0 -f 30 -R -t 120 -c alsa,plughw:Loopback,1
 ```
 
 **For I2C OLEDs** (mpd_oled -o 3, 4 or 6) you may need to specify the I2C

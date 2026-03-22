@@ -16,38 +16,7 @@ commands take a long time to run on a Pi Zero).
 
 ### Moode
 
-* [Install mpd_oled binary package on Moode 8](doc/install_moode8_deb.md)
-* [Install mpd_oled binary package on Moode 7](doc/install_moode7_deb.md)
-* [Install mpd_oled binary package on Moode 6](doc/install_moode6_deb.md)
-* [Install mpd_oled from source on Moode 8](doc/install_moode8_source.md)
-* [Install mpd_oled from source on Moode 7](doc/install_moode7_source.md)
-* [Install mpd_oled from source on Moode 6](doc/install_moode6_source.md)
-
-### Volumio
-
-* [Install mpd_oled binary package on Volumio 3](doc/install_volumio3_deb.md)
-* [Install mpd_oled from source on Volumio 3](doc/install_volumio3_source.md)
-
-Another alternative is
-[Mase's mpd_oled plugin for Volumio](https://github.com/supercrab/volumio-plugins/tree/master/plugins/miscellanea/mpd_oled)
-(external project). The plugin installs mpd_oled and allows
-it to be configured through the Volumio UI.
-
-### rAudio
-
-* [Install mpd_oled from source on rAudio 1](doc/install_raudio1.md)
-
-### Other OS
-
-* Debian-based OS running MPD: follow the instructions to
-  [Install mpd_oled from source on Volumio 3](doc/install_volumio3_source.md)
-  but configure a copy of the audio by editing /etc/mpd.conf directly and
-  appending the contents of `/usr/local/share/mp_oled/mpd_oled_fifo.conf`.
-* Arch-based OS running MPD: follow the instructions to
-  [Install mpd_oled from source on rAudio 1](doc/install_raudio1_source.md)
-  but configure a copy of the audio by editing /etc/mpd.conf directly and
-  appending the contents of `/usr/local/share/mp_oled/mpd_oled_fifo.conf`.
-
+* [Install mpd_oled from source on Moode 10](doc/install_moode10_source.md)
 
 ## Program Help and Options
 
@@ -69,6 +38,7 @@ Options
   -b <num>   number of bars to display (default: 16)
   -g <sz>    gap between bars in, pixels (default: 1)
   -f <hz>    framerate in Hz (default: 15)
+  -t <secs>  display timeout in stop mode: -1 always on, 0-3600 secs
   -s <vals>  scroll rate (pixels per second) and start delay (seconds), up
              to four comma separated decimal values (default: 8.0,5.0) as:
                 rate_all
@@ -94,6 +64,38 @@ Options
   -p <plyr>  Player: mpd, moode, volumio, runeaudio (default: detected)
 Example :
 mpd_oled -o 6 use a SH1106 I2C 128x64 OLED
+```
+
+## Spectrum Types
+
+| Type | Description | Channel |
+|------|-------------|---------|
+| 0 | Filled spectrum | mono |
+| 1 | Filled spectrum + peak hold | mono |
+| 2 | Dot spectrum | mono |
+| 3 | Inverted spectrum | mono |
+| 4 | Inverted spectrum + peak hold | mono |
+| 5 | VU meter filled | stereo |
+| 6 | VU meter filled + peak hold | stereo |
+| 7 | VU meter dot | stereo |
+| 8 | VU meter inverted | stereo |
+| 9 | VU meter inverted + peak hold | stereo |
+
+## Runtime Controls
+
+mpd_oled accepts commands via a named pipe at `/tmp/mpd_oled_ctrl`:
+
+```
+echo "next_type"       > /tmp/mpd_oled_ctrl  # cycle spectrum type forward
+echo "prev_type"       > /tmp/mpd_oled_ctrl  # cycle spectrum type backward
+echo "next_screen"     > /tmp/mpd_oled_ctrl  # cycle screen layout forward
+echo "prev_screen"     > /tmp/mpd_oled_ctrl  # cycle screen layout backward
+echo "bars_up"         > /tmp/mpd_oled_ctrl  # increase number of bars
+echo "bars_down"       > /tmp/mpd_oled_ctrl  # decrease number of bars
+echo "sens:150"        > /tmp/mpd_oled_ctrl  # set sensitivity (not persisted)
+echo "sens:-1"         > /tmp/mpd_oled_ctrl  # reset sensitivity to default
+echo "screensaver"     > /tmp/mpd_oled_ctrl  # toggle screensaver
+echo "screensaver_off" > /tmp/mpd_oled_ctrl  # turn off screensaver
 ```
 
 Please check the [FAQ](doc/FAQ.md)
