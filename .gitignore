@@ -41,3 +41,4 @@ m4/lt~obsolete.m4
 
 src/mpd_oled
 scripts/mpd_oled_service_install
+state

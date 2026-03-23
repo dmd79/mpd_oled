@@ -1,0 +1,14 @@
+[Unit]
+Description=mpd_oled Control Web Server
+After=network.target mpd_oled.service
+Wants=mpd_oled.service
+
+[Service]
+Type=simple
+User=pi
+ExecStart=/usr/bin/python3 /home/pi/mpd_oled/mpd_oled_ctrl_server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

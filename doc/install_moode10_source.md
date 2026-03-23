@@ -1,8 +1,5 @@
 # Install instructions for Moode 10 using source
 
-These instructions are for installing mpd_oled using source on
-Moode 10.
-
 ## Base system
 
 Install [Moode](http://moodeaudio.org/). Ensure a command line prompt is
@@ -15,27 +12,22 @@ default username 'pi', default password 'moodeaudio').
 Install all the packages needed to build and run cava and mpd_oled
 ```
 sudo apt update
-sudo apt install autoconf make libtool libfftw3-dev libiniparser-dev libmpdclient-dev libi2c-dev i2c-tools lm-sensors git libasound2-dev autoconf-archive
+sudo apt install autoconf automake make libtool autoconf-archive libfftw3-dev libiniparser-dev libmpdclient-dev libi2c-dev i2c-tools lm-sensors git libasound2-dev
 ```
 
 ## Build and install cava
 
 mpd_oled uses Cava, a bar spectrum audio visualizer, to calculate the spectrum
    
-   <https://github.com/dmd79/cava> forked from <https://github.com/karlstav/cava>
-
-If you have Cava installed (try running `cava -h`), there is no need
-to install Cava again, but to use the installled version you must use
-`mpd_oled -k ...`.
+   <https://github.com/dmd79/cava>
 
 Download, build and install Cava. These commands build a reduced
 feature-set executable called `mpd_oled_cava`.
 ```
-git clone https://github.com/dmd79/cava
+git clone https://github.com/karlstav/cava
 cd cava
-git checkout moode
 ./autogen.sh
-./configure --disable-input-portaudio --disable-input-sndio --disable-output-ncurses --disable-input-pulse --program-prefix=mpd_oled_
+./configure --disable-input-portaudio --disable-input-sndio --disable-output-ncurses --disable-input-pulse --disable-output-sdl --program-prefix=mpd_oled_
 make
 sudo make install-strip
 ```
@@ -113,13 +105,15 @@ service file.
 sudo mpd_oled_service_install
 ```
 
-The mpd_oled program can now be run with `sudo mpd_oled_service_edit` (plus
-options), and this also sets up mpd_oled with the same options as a service
-to be run at boot. Rerunning `sudo mpd_oled_service_edit` with different
-options will stop the current running mpd_oled and start it again with
-the new options. (Test commands can also be run with `mpd_oled` (plus
-options), and stopped with Ctrl-C, but ensure that no other copy of
-mpd_oled is running).
+Configure and start mpd_oled with the correct options for Moode 10:
+```
+sudo mpd_oled_service_edit -o 1 -A 0 -f 30 -R -t 120 -c alsa,plughw:Loopback,1
+```
+
+Rerunning `sudo mpd_oled_service_edit` with different options will stop the
+current running mpd_oled and start it again with the new options. (Test
+commands can also be run with `mpd_oled` (plus options), and stopped with
+Ctrl-C, but ensure that no other copy of mpd_oled is running).
 
 The OLED type MUST be specified with -o from the following list:
     1 - Adafruit (SSD1306, SSD1309) SPI 128x64,
@@ -132,7 +126,7 @@ An example command, for a generic I2C SH1106 display (OLED type 6) with
 a display of 10 bars and a gap of 1 pixel between bars and a framerate
 of 20Hz is
 ```
-sudo mpd_oled_service_edit -o 1 -A 0 -f 30 -R -t 120 -c alsa,plughw:Loopback,1
+sudo mpd_oled_service_edit -o 6 -b 21 -g 1 -f 20 -c alsa,plughw:Loopback,1
 ```
 
 **For I2C OLEDs** (mpd_oled -o 3, 4 or 6) you may need to specify the I2C
@@ -142,7 +136,7 @@ If you have a reset pin connected, specify the GPIO number with option -r,
 e.g. `sudo mpd_oled_service_edit -o6 -r 24 ...`. Specify the I2C bus number,
 if not 1, with option -B, e.g. `sudo mpd_oled_service_edit -o6 -B 0 ...`
 
-**For, SPI OLEDs** (option -o 1 or 7), you may need to specify your reset pin
+**For SPI OLEDs** (option -o 1 or 7), you may need to specify your reset pin
 GPIO number (option -r, default 25), DC pin GPIO number (option -D,
 default 24) or CS value (option -S, default 0).
 
@@ -158,7 +152,7 @@ file will open in an editor, allowing the full service file to be
 changed, and not just the mpd_oled options.
 
 If the mpd_oled options are valid the display will be started after
-the editor is closed, and will also be configured to start a boot
+the editor is closed, and will also be configured to start at boot.
 
 Check the program is working correctly by looking at the display while
 the player is stopped, paused and playing music.
@@ -174,6 +168,32 @@ sudo systemctl disable mpd_oled   # don't start mpd_oled at boot
 sudo systemctl start mpd_oled     # start mpd_oled now
 sudo systemctl stop mpd_oled      # stop mpd_oled now
 sudo systemctl status mpd_oled    # report the status of the service
+```
+
+## Install web control server (optional)
+
+mpd_oled includes a web-based control panel accessible on port 8080 that
+allows runtime control of spectrum type, screen layout, bars, sensitivity
+per bars preset, and equalizer.
+
+Copy the server script and install the service:
+```
+cp /home/pi/mpd_oled/mpd_oled_ctrl_server.py /home/pi/mpd_oled/
+sudo cp /home/pi/mpd_oled/mpd_oled_ctrl.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable mpd_oled_ctrl
+sudo systemctl start mpd_oled_ctrl
+```
+
+The control panel is then available at `http://<raspberry-pi-ip>:8080`
+
+### Extra commands to control the web server service
+```
+sudo systemctl enable mpd_oled_ctrl    # start at boot
+sudo systemctl disable mpd_oled_ctrl   # don't start at boot
+sudo systemctl start mpd_oled_ctrl     # start now
+sudo systemctl stop mpd_oled_ctrl      # stop now
+sudo systemctl status mpd_oled_ctrl    # report status
 ```
 
 ## Uninstall

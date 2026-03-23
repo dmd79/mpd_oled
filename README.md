@@ -21,49 +21,47 @@ commands take a long time to run on a Pi Zero).
 ## Program Help and Options
 
 The following text is printed by running `mpd_oled -h`
-```
+
 Usage: mpd_oled -o oled_type [options] [input_file]
 
 Display information about an MPD-based player on an OLED screen
 
 Options
-  -h,--help this help message
-  --version version information
-  -o <type>  OLED type, specified as a number, from the following:
-      1 Adafruit SPI 128x64
-      3 Adafruit I2C 128x64
-      4 Seeed I2C 128x64
-      6 SH1106 I2C 128x64
-      7 SH1106 SPI 128x64
-  -b <num>   number of bars to display (default: 16)
-  -g <sz>    gap between bars in, pixels (default: 1)
-  -f <hz>    framerate in Hz (default: 15)
-  -t <secs>  display timeout in stop mode: -1 always on, 0-3600 secs
-  -s <vals>  scroll rate (pixels per second) and start delay (seconds), up
-             to four comma separated decimal values (default: 8.0,5.0) as:
-                rate_all
-                rate_all,delay_all
-                rate_title,delay_all,rate_artist
-                rate_title,delay_title,rate_artist,delay_artist
-  -C <fmt>   clock format: 0 - 24h leading 0 (default), 1 - 24h no leading 0,
-                2 - 24h leading 0, 3 - 24h no leading 0
-  -d         use USA date format MM-DD-YYYY (default: DD-MM-YYYY)
-  -P <val>   pause screen type: p - play (default), s - stop
-  -k         cava executable name is cava (default: mpd_oled_cava)
-  -c         cava input method and source (default: 'fifo,/tmp/mpd_oled_fifo')
-             e.g. 'fifo,/tmp/my_fifo', 'alsa,hw:5,0', 'pulse'
-  -R         rotate display 180 degrees
-  -I <val>   invert black/white: n - normal (default), i - invert,
-             number - switch between n and i with this period (hours), which
-             may help avoid screen burn
-  -a <addr>  I2C address, in hex (default: default for OLED type)
-  -B num     I2C bus number (default: 1, giving device /dev/i2c-1)
-  -r <gpio>  I2C/SPI reset GPIO number, if needed (default: 25)
-  -D <gpio>  SPI DC GPIO number (default: 24)
-  -S <num>   SPI CS number (default: 0)
-  -p <plyr>  Player: mpd, moode, volumio, runeaudio (default: detected)
-Example :
-mpd_oled -o 6 use a SH1106 I2C 128x64 OLED
+- `-h,--help` this help message
+- `--version` version information
+- `-o <type>` OLED type, specified as a number, from the following:
+  - 1 Adafruit SPI 128x64
+  - 3 Adafruit I2C 128x64
+  - 4 Seeed I2C 128x64
+  - 6 SH1106 I2C 128x64
+  - 7 SH1106 SPI 128x64
+- `-b <num>` number of bars to display (default: 16)
+- `-g <sz>` gap between bars in pixels (default: 1)
+- `-f <hz>` framerate in Hz (default: 15)
+- `-A <autosens>` 1 = on, 0 = off
+- `-G <sensitivity>` manual sensitivity in %. Autosens must be turned off. 200 means double height.
+- `-e <val>` channel selection: 1 = mono, 2 = stereo
+- `-F <val>` spectrum view: 0 standard (default), 1 large, 2 full
+- `-T <val>` spectrum type: 0-9 (see Spectrum Types below)
+- `-t <secs>` display timeout in stop mode: -1 always on, 0-3600 secs
+- `-s <vals>` scroll rate (pixels/sec) and start delay (secs), up to four comma separated values (default: 8.0,5.0)
+- `-C <fmt>` clock format: 0 - 24h leading 0 (default), 1 - 24h no leading 0, 2 - 12h leading 0, 3 - 12h no leading 0
+- `-d` use USA date format MM-DD-YYYY (default: DD-MM-YYYY)
+- `-P <val>` pause screen type: p - play (default), s - stop
+- `-k` cava executable name is cava (default: mpd_oled_cava)
+- `-c` cava input method and source (default: `fifo,/tmp/mpd_oled_fifo`)
+- `-R` rotate display 180 degrees
+- `-I <val>` invert black/white: n - normal (default), i - invert, number - period in hours
+- `-a <addr>` I2C address in hex (default: default for OLED type)
+- `-B <num>` I2C bus number (default: 1)
+- `-r <gpio>` I2C/SPI reset GPIO number (default: 25)
+- `-D <gpio>` SPI DC GPIO number (default: 24)
+- `-S <num>` SPI CS number (default: 0)
+- `-p <plyr>` Player: mpd, moode, volumio, runeaudio (default: detected)
+
+Example for Moode 10 with Adafruit SPI 128x64 display (OLED type 1):
+```
+sudo mpd_oled_service_edit -o 1 -A 0 -f 30 -R -t 120 -c alsa,plughw:Loopback,1
 ```
 
 ## Spectrum Types
@@ -83,19 +81,66 @@ mpd_oled -o 6 use a SH1106 I2C 128x64 OLED
 
 ## Runtime Controls
 
-mpd_oled accepts commands via a named pipe at `/tmp/mpd_oled_ctrl`:
+mpd_oled accepts commands via a named pipe at `/tmp/mpd_oled_ctrl`, and also
+includes a web-based control panel accessible at `http://<raspberry-pi-ip>:8080`:
 
+![mpd_oled web control panel](mpd_oled_webui.png)
+
+Example:
 ```
-echo "next_type"       > /tmp/mpd_oled_ctrl  # cycle spectrum type forward
-echo "prev_type"       > /tmp/mpd_oled_ctrl  # cycle spectrum type backward
-echo "next_screen"     > /tmp/mpd_oled_ctrl  # cycle screen layout forward
-echo "prev_screen"     > /tmp/mpd_oled_ctrl  # cycle screen layout backward
-echo "bars_up"         > /tmp/mpd_oled_ctrl  # increase number of bars
-echo "bars_down"       > /tmp/mpd_oled_ctrl  # decrease number of bars
-echo "sens:150"        > /tmp/mpd_oled_ctrl  # set sensitivity (not persisted)
-echo "sens:-1"         > /tmp/mpd_oled_ctrl  # reset sensitivity to default
-echo "screensaver"     > /tmp/mpd_oled_ctrl  # toggle screensaver
-echo "screensaver_off" > /tmp/mpd_oled_ctrl  # turn off screensaver
+echo "next_type" > /tmp/mpd_oled_ctrl
+```
+
+Available commands:
+
+Cycle spectrum type forward:
+```
+echo "next_type" > /tmp/mpd_oled_ctrl
+```
+
+Cycle spectrum type backward:
+```
+echo "prev_type" > /tmp/mpd_oled_ctrl
+```
+
+Cycle screen layout forward:
+```
+echo "next_screen" > /tmp/mpd_oled_ctrl
+```
+
+Cycle screen layout backward:
+```
+echo "prev_screen" > /tmp/mpd_oled_ctrl
+```
+
+Increase number of bars:
+```
+echo "bars_up" > /tmp/mpd_oled_ctrl
+```
+
+Decrease number of bars:
+```
+echo "bars_down" > /tmp/mpd_oled_ctrl
+```
+
+Set sensitivity (not persisted, resets on type change):
+```
+echo "sens:150" > /tmp/mpd_oled_ctrl
+```
+
+Reset sensitivity to default:
+```
+echo "sens:-1" > /tmp/mpd_oled_ctrl
+```
+
+Toggle screensaver:
+```
+echo "screensaver" > /tmp/mpd_oled_ctrl
+```
+
+Turn off screensaver:
+```
+echo "screensaver_off" > /tmp/mpd_oled_ctrl
 ```
 
 Please check the [FAQ](doc/FAQ.md)

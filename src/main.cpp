@@ -162,6 +162,11 @@ public:
   int spi_cs = OLED_SPI_CS0;     // SPI CS - 0: CS0, 1: CS1
   Player player;
   string state_file = "/home/pi/mpd_oled/state"; // persistent state file
+  // Per-preset sensitivity (loaded from state file)
+  int sens_64[3]  = {50, 30, 20};  // 64px: 6, 16, 21 bars
+  int sens_128[3] = {50, 30, 20};  // 128px: 6, 16, 32 bars
+  int sens_vu     = 420;
+  double eq[5]    = {3.0, 2.0, 1.5, 1.2, 1.0};
 
   OledOpts() : ProgramOpts("mpd_oled", "0.02")
   {
@@ -480,22 +485,23 @@ void OledOpts::process_command_line(int argc, char **argv)
 }
 
 string print_config_file(int bars, int autosens, int sensitivity, int framerate, string cava_method,
-                         string cava_source, string channel, string fifo_path_cava_out)
+                         string cava_source, string channel, string fifo_path_cava_out,
+                         double eq[5] = nullptr)
 {
   char templt[] = "/tmp/cava_config_XXXXXX";
   int fd = mkstemp(templt);
   if (fd == -1)
-    return ""; // failed to open file and convert to file stream
+    return "";
   FILE *ofile = fdopen(fd, "w");
   if (ofile == NULL)
-    return ""; // failed to open file and convert to file stream
+    return "";
 
   fprintf(ofile,
           "[general]\n"
           "framerate = %d\n"
           "bars = %d\n"
           "autosens = %d\n"
-          "sensitivity = %d\n" 
+          "sensitivity = %d\n"
           "\n"
           "[input]\n"
           "method = %s\n"
@@ -507,8 +513,21 @@ string print_config_file(int bars, int autosens, int sensitivity, int framerate,
           "channels = %s\n"
           "raw_target = %s\n"
           "bit_format = 8bit\n",
-          framerate, bars, autosens, sensitivity, cava_method.c_str(), cava_source.c_str(), channel.c_str(),
-          fifo_path_cava_out.c_str());
+          framerate, bars, autosens, sensitivity,
+          cava_method.c_str(), cava_source.c_str(),
+          channel.c_str(), fifo_path_cava_out.c_str());
+
+  if (eq != nullptr) {
+    fprintf(ofile,
+            "\n[eq]\n"
+            "1 = %.2f\n"
+            "2 = %.2f\n"
+            "3 = %.2f\n"
+            "4 = %.2f\n"
+            "5 = %.2f\n",
+            eq[0], eq[1], eq[2], eq[3], eq[4]);
+  }
+
   fclose(ofile);
   return templt;
 }
@@ -670,44 +689,46 @@ static const SpectParams spect_params[SPECTRUM_TYPE_MAX + 1] = {
   {2,  10, 420, "stereo"}, // 9 VU inverted+peaks
 };
 
-// override_sensitivity: -1 = use table value, >=0 = override (not persisted)
+// override_sensitivity: -1 = use per-preset value from opts, >=0 = override (not persisted)
 FILE *restart_cava(OledOpts &opts, const string &fifo_path_cava_out,
                    display_info &disp_info, int override_sensitivity = -1)
 {
-  // Kill existing cava
   string kill_cmd = "killall " + opts.cava_prog_name + " 2>/dev/null";
   system(kill_cmd.c_str());
-  usleep(200000); // 200ms for cava to die
+  usleep(200000);
 
-  // Update opts from table
   const SpectParams &p = spect_params[spectrum_type];
-  opts.sensitivity = (override_sensitivity >= 0) ? override_sensitivity : p.sensitivity;
-  opts.channel     = p.channel;
+  opts.channel = p.channel;
 
-  // For mono types use the current screen bars preset, for stereo use table
-  if (spectrum_type < 5) {
-    opts.bars = current_display_bars();
-    opts.gap  = current_display_gap();
-  } else {
+  if (spectrum_type >= 5) {
+    // VU meter — use table bars/gap, sens_vu from opts
     opts.bars = p.bars;
     opts.gap  = p.gap;
+    opts.sensitivity = (override_sensitivity >= 0) ? override_sensitivity : opts.sens_vu;
+  } else {
+    // Spectrum — use bars preset, per-preset sensitivity
+    opts.bars = current_display_bars();
+    opts.gap  = current_display_gap();
+    if (override_sensitivity >= 0) {
+      opts.sensitivity = override_sensitivity;
+    } else {
+      int idx = (SPECT_WIDTH == 64) ? bars_preset_idx_64 : bars_preset_idx_128;
+      opts.sensitivity = (SPECT_WIDTH == 64) ? opts.sens_64[idx] : opts.sens_128[idx];
+    }
   }
 
-  // Resize spectrum buffers
   disp_info.spect.init(opts.bars, opts.gap);
 
-  // Write new cava config
   string config_file_name =
       print_config_file(opts.bars, opts.autosens, opts.sensitivity,
                         opts.framerate, opts.cava_method, opts.cava_source,
-                        opts.channel, fifo_path_cava_out);
+                        opts.channel, fifo_path_cava_out, opts.eq);
   if (config_file_name.empty())
     return NULL;
 
-  // Start new cava
   string cava_cmd = opts.cava_prog_name + " -p " + config_file_name + " &";
   system(cava_cmd.c_str());
-  usleep(300000); // 300ms for cava to start and open the fifo
+  usleep(300000);
 
   FILE *new_fifo = fopen(fifo_path_cava_out.c_str(), "rb");
   return new_fifo;
@@ -738,31 +759,53 @@ string read_ctrl_cmd(int pipe_fd)
 }
 
 // Load state from file (spectrum_type, full_spectrum, bars_idx_64, bars_idx_128)
-void load_state(const string &path)
+void load_state(const string &path, OledOpts &opts)
 {
   FILE *f = fopen(path.c_str(), "r");
   if (!f)
     return;
   int t = 0, fs = 0, bi64 = 1, bi128 = 1;
-  if (fscanf(f, "%d %d %d %d", &t, &fs, &bi64, &bi128) >= 2) {
-    if (t >= 0 && t <= SPECTRUM_TYPE_MAX)
-      spectrum_type = t;
-    if (fs >= 0 && fs <= FULL_SPECTRUM_MAX)
-      full_spectrum = fs;
+  int s64_0=50, s64_1=30, s64_2=20;
+  int s128_0=50, s128_1=30, s128_2=20;
+  int svu=420;
+  double e1=1.5, e2=1.2, e3=1.0, e4=0.7, e5=0.4;
+
+  int n = fscanf(f, "%d %d %d %d %d %d %d %d %d %d %d %lf %lf %lf %lf %lf",
+                 &t, &fs, &bi64, &bi128,
+                 &s64_0, &s64_1, &s64_2,
+                 &s128_0, &s128_1, &s128_2,
+                 &svu, &e1, &e2, &e3, &e4, &e5);
+  fclose(f);
+
+  if (n >= 2) {
+    if (t >= 0 && t <= SPECTRUM_TYPE_MAX)     spectrum_type = t;
+    if (fs >= 0 && fs <= FULL_SPECTRUM_MAX)   full_spectrum = fs;
     if (bi64  >= 0 && bi64  < NUM_BARS_PRESETS_64)  bars_preset_idx_64  = bi64;
     if (bi128 >= 0 && bi128 < NUM_BARS_PRESETS_128) bars_preset_idx_128 = bi128;
   }
-  fclose(f);
+  if (n >= 11) {
+    opts.sens_64[0] = s64_0; opts.sens_64[1] = s64_1; opts.sens_64[2] = s64_2;
+    opts.sens_128[0] = s128_0; opts.sens_128[1] = s128_1; opts.sens_128[2] = s128_2;
+    opts.sens_vu = svu;
+  }
+  if (n >= 16) {
+    opts.eq[0]=e1; opts.eq[1]=e2; opts.eq[2]=e3; opts.eq[3]=e4; opts.eq[4]=e5;
+  }
 }
 
 // Save state to file (best-effort)
-void save_state(const string &path)
+void save_state(const string &path, const OledOpts &opts)
 {
   FILE *f = fopen(path.c_str(), "w");
   if (!f)
     return;
-  fprintf(f, "%d %d %d %d\n", spectrum_type, full_spectrum,
-          bars_preset_idx_64, bars_preset_idx_128);
+  fprintf(f, "%d %d %d %d %d %d %d %d %d %d %d %.2f %.2f %.2f %.2f %.2f\n",
+          spectrum_type, full_spectrum,
+          bars_preset_idx_64, bars_preset_idx_128,
+          opts.sens_64[0], opts.sens_64[1], opts.sens_64[2],
+          opts.sens_128[0], opts.sens_128[1], opts.sens_128[2],
+          opts.sens_vu,
+          opts.eq[0], opts.eq[1], opts.eq[2], opts.eq[3], opts.eq[4]);
   fclose(f);
 }
 
@@ -821,6 +864,11 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
             spectrum_type = (spectrum_type + 1) % (SPECTRUM_TYPE_MAX + 1);
           else if (cmd == "prev_type")
             spectrum_type = (spectrum_type + SPECTRUM_TYPE_MAX) % (SPECTRUM_TYPE_MAX + 1);
+          else if (cmd.size() > 9 && cmd.substr(0, 9) == "set_type:") {
+            int t = std::stoi(cmd.substr(9));
+            if (t >= 0 && t <= SPECTRUM_TYPE_MAX)
+              spectrum_type = t;
+          }
           else if (cmd == "next_screen")
             full_spectrum = (full_spectrum + 1) % (FULL_SPECTRUM_MAX + 1);
           else if (cmd == "prev_screen")
@@ -838,8 +886,8 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
               bars_preset_idx_128 = std::max(0, bars_preset_idx_128 - 1);
           }
           // --- SENSITIVITY RUNTIME CONTROL ---
-          // Usage: echo "sens:150" > /tmp/mpd_oled_ctrl
-          //        echo "sens:-1"  > /tmp/mpd_oled_ctrl  (reset to table default)
+          // echo "sens:150" > /tmp/mpd_oled_ctrl   (temp override)
+          // echo "sens:-1"  > /tmp/mpd_oled_ctrl   (reset to preset default)
           else if (cmd.size() > 5 && cmd.substr(0, 5) == "sens:") {
             int new_sens = std::stoi(cmd.substr(5));
             fclose(fifo_file);
@@ -849,7 +897,43 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
               return 3;
             }
             fifo_fd = fileno(fifo_file);
-            // Do NOT save_state — sensitivity override not persisted
+            // Do NOT save_state — temp override not persisted
+          }
+          // --- SENS_VU: set VU meter sensitivity and save ---
+          // echo "sens_vu:420" > /tmp/mpd_oled_ctrl
+          else if (cmd.size() > 8 && cmd.substr(0, 8) == "sens_vu:") {
+            opts.sens_vu = std::stoi(cmd.substr(8));
+            save_state(opts.state_file, opts);
+            if (spectrum_type >= 5) {
+              fclose(fifo_file);
+              fifo_file = restart_cava(opts, fifo_path_cava_out, disp_info);
+              if (fifo_file == NULL) { fprintf(stderr, "error: could not restart cava\n"); return 3; }
+              fifo_fd = fileno(fifo_file);
+            }
+          }
+          // --- SENS_RELOAD: reload per-preset sensitivity from state (sent by web UI after saving) ---
+          else if (cmd == "sens_reload") {
+            load_state(opts.state_file, opts);
+            fclose(fifo_file);
+            fifo_file = restart_cava(opts, fifo_path_cava_out, disp_info);
+            if (fifo_file == NULL) { fprintf(stderr, "error: could not restart cava\n"); return 3; }
+            fifo_fd = fileno(fifo_file);
+          }
+          // --- EQ: set equalizer bands and save ---
+          // echo "eq:1.5,1.2,1.0,0.7,0.4" > /tmp/mpd_oled_ctrl
+          else if (cmd.size() > 3 && cmd.substr(0, 3) == "eq:") {
+            string vals = cmd.substr(3);
+            double v[5] = {1,1,1,1,1};
+            int parsed = sscanf(vals.c_str(), "%lf,%lf,%lf,%lf,%lf",
+                                &v[0],&v[1],&v[2],&v[3],&v[4]);
+            if (parsed == 5) {
+              for (int i=0;i<5;i++) opts.eq[i] = v[i];
+              save_state(opts.state_file, opts);
+              fclose(fifo_file);
+              fifo_file = restart_cava(opts, fifo_path_cava_out, disp_info);
+              if (fifo_file == NULL) { fprintf(stderr, "error: could not restart cava\n"); return 3; }
+              fifo_fd = fileno(fifo_file);
+            }
           }
 
           // Update SPECT_WIDTH when screen changes
@@ -858,6 +942,7 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
 
           // Restart CAVA on type, bars or screen change (mono types only)
           if (cmd == "next_type" || cmd == "prev_type" ||
+              (cmd.size() > 9 && cmd.substr(0, 9) == "set_type:") ||
               cmd == "bars_up"   || cmd == "bars_down" ||
               ((cmd == "next_screen" || cmd == "prev_screen") && spectrum_type < 5)) {
             fclose(fifo_file);
@@ -869,9 +954,12 @@ int start_idle_loop(ArduiPi_OLED &display, FILE *fifo_file,
             fifo_fd = fileno(fifo_file);
           }
 
-          // Persist state across reboots (not for sens: — intentional)
-          if (!(cmd.size() > 5 && cmd.substr(0, 5) == "sens:"))
-            save_state(opts.state_file);
+          // Persist state (not for temp overrides — sens:, sens_vu:, sens_reload, eq: handle their own save)
+          if (!(cmd.size() > 5 && cmd.substr(0, 5) == "sens:") &&
+              cmd != "sens_reload" &&
+              !(cmd.size() > 8 && cmd.substr(0, 8) == "sens_vu:") &&
+              !(cmd.size() > 3 && cmd.substr(0, 3) == "eq:"))
+            save_state(opts.state_file, opts);
         }
       }
     }
@@ -958,7 +1046,7 @@ int main(int argc, char **argv)
     opts.error("could not open control pipe: " + string(strerror(errno)));
 
   // Load persisted state (spectrum_type, full_spectrum, bars indices)
-  load_state(opts.state_file);
+  load_state(opts.state_file, opts);
 
   // Update SPECT_WIDTH based on loaded full_spectrum
   SPECT_WIDTH = (full_spectrum == 0) ? 64 : 128;
@@ -966,14 +1054,16 @@ int main(int argc, char **argv)
   // Apply cava params for the loaded spectrum_type
   {
     const SpectParams &p = spect_params[spectrum_type];
-    opts.sensitivity = p.sensitivity;
-    opts.channel     = p.channel;
-    if (spectrum_type < 5) {
-      opts.bars = current_display_bars();
-      opts.gap  = current_display_gap();
-    } else {
+    opts.channel = p.channel;
+    if (spectrum_type >= 5) {
       opts.bars = p.bars;
       opts.gap  = p.gap;
+      opts.sensitivity = opts.sens_vu;
+    } else {
+      opts.bars = current_display_bars();
+      opts.gap  = current_display_gap();
+      int idx = bars_preset_idx_64;
+      opts.sensitivity = opts.sens_64[idx];
     }
   }
 
@@ -987,7 +1077,7 @@ int main(int argc, char **argv)
   // Create a temporary config file for cava
   string config_file_name =
       print_config_file(opts.bars, opts.autosens, opts.sensitivity, opts.framerate, opts.cava_method,
-                        opts.cava_source, opts.channel, fifo_path_cava_out);
+                        opts.cava_source, opts.channel, fifo_path_cava_out, opts.eq);
   if (config_file_name == "")
     opts.error("could not create cava config file: " + string(strerror(errno)));
 
