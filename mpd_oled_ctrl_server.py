@@ -146,9 +146,19 @@ header span { color:var(--muted); font-size:11px; }
 .row input[type=range]::-webkit-slider-thumb:active { transform:scale(1.3); }
 .row input[type=range].vu::-webkit-slider-thumb { background:var(--accent2); box-shadow:0 0 7px var(--accent2); }
 .row input[type=range].eq::-webkit-slider-thumb { background:var(--warn); box-shadow:0 0 7px var(--warn); }
-.val { width:42px; text-align:right; color:var(--accent); font-size:12px; font-weight:600; }
+.val { width:42px; text-align:right; color:var(--accent); font-size:12px; font-weight:600; cursor:pointer; border-bottom:1px dashed transparent; transition:border-color 0.15s; }
+.val:hover { border-bottom-color: var(--accent); }
 .val.vu { color:var(--accent2); }
+.val.vu:hover { border-bottom-color: var(--accent2); }
 .val.eq { color:var(--warn); }
+.val.eq:hover { border-bottom-color: var(--warn); }
+.val-input {
+  width:52px; background:var(--s2); border:1px solid var(--accent);
+  color:var(--accent); font-family:'JetBrains Mono',monospace; font-size:12px;
+  font-weight:600; text-align:right; padding:1px 4px; border-radius:2px; outline:none;
+}
+.val-input.vu { border-color:var(--accent2); color:var(--accent2); }
+.val-input.eq { border-color:var(--warn); color:var(--warn); }
 .btn-row { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
 button {
   background:var(--s2); border:1px solid var(--border); color:var(--text);
@@ -327,6 +337,16 @@ button.danger:hover { background:rgba(255,68,102,0.2); }
     </div>
   </div>
 
+  <!-- EXPORT / IMPORT -->
+  <div class="panel full">
+    <h2>Configuration</h2>
+    <div class="btn-row">
+      <button class="apply" onclick="exportConfig()">⬇ Export JSON</button>
+      <button class="cmd" onclick="document.getElementById('import-file').click()">⬆ Import JSON</button>
+      <input type="file" id="import-file" accept=".json" style="display:none" onchange="importConfig(this)">
+    </div>
+  </div>
+
 </div>
 <div id="status"></div>
 
@@ -373,6 +393,57 @@ function updEq(el, n) {
   document.getElementById('eqb'+n).style.height = ((el.value-1)/9*100)+'%';
 }
 
+// Click on value label → inline edit input
+function makeEditable(spanId, sliderId, isFloat) {
+  const span = document.getElementById(spanId);
+  const slider = document.getElementById(sliderId);
+  const cls = span.className.replace('val','').trim(); // vu or eq or ''
+  const cur = span.textContent;
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.className = 'val-input' + (cls ? ' '+cls : '');
+  input.value = isFloat ? parseFloat(cur) : parseInt(cur);
+  input.min = slider.min;
+  input.max = slider.max;
+  input.step = isFloat ? 0.1 : 1;
+  span.replaceWith(input);
+  input.focus();
+  input.select();
+
+  function commit() {
+    let v = isFloat ? parseFloat(input.value) : parseInt(input.value);
+    if (isNaN(v)) v = isFloat ? parseFloat(cur) : parseInt(cur);
+    v = Math.max(+slider.min, Math.min(+slider.max, v));
+    slider.value = v;
+    const newSpan = document.createElement('span');
+    newSpan.id = spanId;
+    newSpan.className = 'val' + (cls ? ' '+cls : '');
+    newSpan.textContent = isFloat ? v.toFixed(1) : v;
+    newSpan.onclick = () => makeEditable(spanId, sliderId, isFloat);
+    input.replaceWith(newSpan);
+    markEditing();
+    if (isFloat) {
+      const n = sliderId.replace('eq','');
+      document.getElementById('eqb'+n).style.height = ((v-1)/9*100)+'%';
+    }
+  }
+  input.onblur = commit;
+  input.onkeydown = e => { if (e.key==='Enter') commit(); if (e.key==='Escape') { input.value=cur; commit(); } };
+}
+
+// Attach click handlers to all val spans after loadState
+function attachValClicks() {
+  ['sens_64_0','sens_64_1','sens_64_2',
+   'sens_128_0','sens_128_1','sens_128_2','sens_vu'].forEach(k => {
+    const el = document.getElementById('v_'+k);
+    if (el) el.onclick = () => makeEditable('v_'+k, k, false);
+  });
+  for (let i=1;i<=5;i++) {
+    const el = document.getElementById('v_eq'+i);
+    if (el) el.onclick = () => makeEditable('v_eq'+i, 'eq'+i, true);
+  }
+}
+
 async function loadState() {
   const r = await fetch('/state');
   state = await r.json();
@@ -392,6 +463,7 @@ async function loadState() {
     }
   }
   updateLive();
+  if (!userEditing) attachValClicks();
 }
 
 function updateLive() {
@@ -470,6 +542,73 @@ function resetEq() {
   saveEq();
 }
 
+function exportConfig() {
+  const cfg = {
+    sens_64_0:  +document.getElementById('sens_64_0').value,
+    sens_64_1:  +document.getElementById('sens_64_1').value,
+    sens_64_2:  +document.getElementById('sens_64_2').value,
+    sens_128_0: +document.getElementById('sens_128_0').value,
+    sens_128_1: +document.getElementById('sens_128_1').value,
+    sens_128_2: +document.getElementById('sens_128_2').value,
+    sens_vu:    +document.getElementById('sens_vu').value,
+    eq1: +document.getElementById('eq1').value,
+    eq2: +document.getElementById('eq2').value,
+    eq3: +document.getElementById('eq3').value,
+    eq4: +document.getElementById('eq4').value,
+    eq5: +document.getElementById('eq5').value,
+  };
+  const blob = new Blob([JSON.stringify(cfg, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'mpd_oled_config.json';
+  a.click();
+  showStatus('✓ Config exported', true);
+}
+
+function importConfig(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async e => {
+    try {
+      const cfg = JSON.parse(e.target.result);
+      // Update sliders
+      const fields = ['sens_64_0','sens_64_1','sens_64_2',
+                      'sens_128_0','sens_128_1','sens_128_2','sens_vu'];
+      fields.forEach(k => {
+        if (cfg[k] !== undefined) {
+          const el = document.getElementById(k);
+          if (el) { el.value = cfg[k]; document.getElementById('v_'+k).textContent = cfg[k]; }
+        }
+      });
+      for (let i=1;i<=5;i++) {
+        if (cfg['eq'+i] !== undefined) {
+          const el = document.getElementById('eq'+i);
+          if (el) {
+            el.value = cfg['eq'+i];
+            document.getElementById('v_eq'+i).textContent = parseFloat(cfg['eq'+i]).toFixed(1);
+            document.getElementById('eqb'+i).style.height = ((cfg['eq'+i]-1)/9*100)+'%';
+          }
+        }
+      }
+      // Save all to state
+      await post('save_sens', {
+        sens_64_0: cfg.sens_64_0, sens_64_1: cfg.sens_64_1, sens_64_2: cfg.sens_64_2,
+        sens_128_0: cfg.sens_128_0, sens_128_1: cfg.sens_128_1, sens_128_2: cfg.sens_128_2,
+      });
+      if (cfg.sens_vu !== undefined) await post('sens_vu', {sens_vu: cfg.sens_vu});
+      const eq = {};
+      for (let i=1;i<=5;i++) if (cfg['eq'+i] !== undefined) eq['eq'+i] = cfg['eq'+i];
+      if (Object.keys(eq).length) await post('eq', eq);
+      showStatus('✓ Config imported and applied', true);
+    } catch(err) {
+      showStatus('✗ Invalid JSON file', false);
+    }
+    input.value = '';
+  };
+  reader.readAsText(file);
+}
+
 function showStatus(msg, ok) {
   const el = document.getElementById('status');
   el.textContent = msg; el.className = 'show '+(ok?'ok':'err');
@@ -479,7 +618,7 @@ function showStatus(msg, ok) {
 buildSegs();
 loadState();
 // Poll state every 3s to stay in sync with IR remote changes
-setInterval(loadState, 3000);
+setInterval(loadState, 500);
 </script>
 </body>
 </html>
